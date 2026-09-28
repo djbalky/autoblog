@@ -185,12 +185,19 @@ export async function migrate(): Promise<void> {
     `SELECT name FROM schema_migrations WHERE name = $1`,
     [PG_SCHEMA_NAME]
   );
-  if (existing.length > 0) return;
-  for (const stmt of PG_SCHEMA_STATEMENTS) {
-    await q.query(stmt);
+  if (existing.length === 0) {
+    for (const stmt of PG_SCHEMA_STATEMENTS) {
+      await q.query(stmt);
+    }
+    await q.query(
+      `INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)`,
+      [PG_SCHEMA_NAME, new Date().toISOString()]
+    );
   }
+  // Columns that arrived in later phases on top of the original schema.
+  // ADD COLUMN IF NOT EXISTS is idempotent and runs even for DBs where the
+  // original migration was already applied, so this is safe to run every boot.
   await q.query(
-    `INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)`,
-    [PG_SCHEMA_NAME, new Date().toISOString()]
+    `ALTER TABLE blog_settings ADD COLUMN IF NOT EXISTS config TEXT NOT NULL DEFAULT ''`
   );
 }

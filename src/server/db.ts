@@ -54,10 +54,31 @@ export function migrate(db: Database): void {
     for (const stmt of SCHEMA_STATEMENTS) {
       db.exec(stmt);
     }
+    ensureColumn(db, "blog_settings", "config", "TEXT NOT NULL DEFAULT ''");
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;
+  }
+}
+/**
+ * Idempotently add a column to an existing table (SQLite's ADD COLUMN has no
+ * IF NOT EXISTS, so we inspect PRAGMA first). Used for columns that arrived in
+ * later phases on top of the original CREATE TABLE statements.
+ */
+function ensureColumn(
+  db: Database,
+  table: string,
+  column: string,
+  definition: string
+): void {
+  const cols = db.query(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`
+    );
   }
 }
 

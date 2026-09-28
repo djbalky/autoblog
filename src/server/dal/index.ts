@@ -7,3 +7,5 @@ export * from "./blogs";
 export * from "./posts";
 export * from "./users";
 export * from "./activity";
+export * from "./media";
+export * from "./wizard";
