@@ -9,6 +9,7 @@
 // with an already-running server. Every sandbox user has passwordless sudo, so
 // the takeover works across user boundaries.
 import handler from "./dist/server/server.js";
+import { mediaIdFromPath, serveMedia } from "./src/server/mediaServe";
 
 // Pinned, NOT read from the environment. The published preview URL
 // (<label>.<PUBLIC_SITE_DOMAIN>) is reverse-proxied to 0.0.0.0:3000 inside the
@@ -41,6 +42,14 @@ for (let attempt = 1; ; attempt++) {
       hostname: HOST,
       async fetch(req) {
         const { pathname } = new URL(req.url);
+        // Uploaded media: /api/media/<id> is answered here from the real `media`
+        // row + the file the DAL wrote under DATA_DIR. See src/server/mediaServe.ts
+        // for why this path is not a file route in this TanStack Start version.
+        const mediaId = mediaIdFromPath(pathname);
+        if (mediaId !== null) {
+          const mediaRes = await serveMedia(mediaId);
+          if (mediaRes) return mediaRes;
+        }
         if (pathname !== "/") {
           const file = Bun.file(CLIENT_DIR + pathname);
           if (await file.exists()) return new Response(file);

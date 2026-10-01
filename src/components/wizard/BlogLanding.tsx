@@ -12,6 +12,8 @@ export function BlogLanding() {
   const { user, blog } = useLoaderData({ from: "/blogs/$blogId" });
   const settings = blog.settings;
   const config = blog.config as Record<string, any> | null;
+  const basic = config?.step1_basic as any;
+  const logoUrl: string | null = basic?.logo_url ?? null;
   const monetization = config?.step8_monetization as any;
   const social = config?.step9_social as any;
   const enabledAdSlots: string[] =
@@ -42,14 +44,31 @@ export function BlogLanding() {
       </header>
       <div className="mx-auto max-w-4xl px-6 py-8">
         <div className="rounded-xl border border-green-200 bg-green-50 p-5 dark:border-green-800 dark:bg-green-900/20">
-          <h2 className="text-lg font-bold text-green-900 dark:text-green-200">
-            ✓ Blog created
-          </h2>
-          <p className="mt-1 text-sm text-green-800 dark:text-green-300">
-            <strong>{blog.name}</strong> is live in the database at{" "}
-            <code className="rounded bg-green-100 px-1 dark:bg-green-900">/{blog.slug}</code>.
-            The dashboard, editor and agents arrive in the next phases.
-          </p>
+          <div className="flex items-start gap-4">
+            {/* The logo is served from the real `media` row written during
+                create, through GET /api/media/<id> — if that route or the file
+                is missing this image simply does not load (no fake placeholder
+                image is substituted). */}
+            {logoUrl && (
+              <img
+                src={logoUrl}
+                alt={`${blog.name} logo`}
+                className="h-14 w-14 shrink-0 rounded-md border border-green-200 bg-white object-contain p-1 dark:border-green-800"
+              />
+            )}
+            <div>
+              <h2 className="text-lg font-bold text-green-900 dark:text-green-200">
+                ✓ Blog created
+              </h2>
+              <p className="mt-1 text-sm text-green-800 dark:text-green-300">
+                <strong>{blog.name}</strong> is live in the database at{" "}
+                <code className="rounded bg-green-100 px-1 dark:bg-green-900">
+                  /{blog.slug}
+                </code>
+                . The dashboard, editor and agents arrive in the next phases.
+              </p>
+            </div>
+          </div>
         </div>
 
         <dl className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">

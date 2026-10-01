@@ -13,7 +13,7 @@
  * the client bundle).
  */
 import { useState, useRef } from "react";
-import { Link, useLoaderData } from "@tanstack/react-router";
+import { Link, useLoaderData, useNavigate } from "@tanstack/react-router";
 import {
   mediaUploadAction,
   checkSlugAction,
@@ -604,6 +604,17 @@ export function BlogWizard() {
   const [fatal, setFatal] = useState<string | null>(null);
   const logoRef = useRef<HTMLInputElement>(null);
   const faviconRef = useRef<HTMLInputElement>(null);
+  /**
+   * True once the user has edited the slug by hand (stops auto-slugging from the
+   * blog name). Declared here, with the other hooks, on purpose: it used to sit
+   * *after* the `if (created) return <success screen>` early return below, so the
+   * render that set `created` returned before this hook ran and React threw
+   * "Rendered fewer hooks than expected" — the blog rows were written and the
+   * user still landed on the router's "Something went wrong!" error screen.
+   * Every hook must be declared before that early return.
+   */
+  const slugTouched = useRef(false);
+  const navigate = useNavigate();
 
   if (created) {
     return (
@@ -684,7 +695,6 @@ export function BlogWizard() {
       return n;
     });
   }
-  const slugTouched = useRef(false);
 
   function setBasic(patch: Partial<WizardForm["basic"]>) {
     setForm((f) => ({ ...f, basic: { ...f.basic, ...patch } }));
@@ -829,7 +839,28 @@ export function BlogWizard() {
         const result = (
           res.data as { result: { blog: { id: number; slug: string } } }
         ).result;
-        setCreated(result.blog);
+        const blog = result?.blog;
+        if (!blog?.id) {
+          // The write side answered OK but without the new blog's id — never
+          // pretend we landed somewhere; send the user to the dashboard.
+          setFatal(
+            "The blog was written but the server did not return its id. Open your dashboard to find it.",
+          );
+          return;
+        }
+        // Real success: land the user on the blog that was just created. The
+        // success screen stays as the fallback, so navigation trouble can never
+        // turn a completed write into an error screen.
+        setCreated(blog);
+        try {
+          await navigate({
+            to: "/blogs/$blogId",
+            params: { blogId: String(blog.id) },
+            replace: true,
+          });
+        } catch {
+          /* success screen is already rendered */
+        }
       } else {
         setFatal(res.error ?? "Could not create the blog. Please try again.");
       }
@@ -1783,8 +1814,13 @@ export function BlogWizard() {
                     </div>
                     <button
                       type="button"
+                      aria-pressed={n.enabled}
                       onClick={() =>
-                        patchNetwork(n.platform, { enabled: !x.enabled })
+                        // Toggle THIS row off its own live value. The previous
+                        // version read `x.enabled` from an outer scope that no
+                        // longer exists here, threw a ReferenceError inside the
+                        // click handler and left every network stuck on "Off".
+                        patchNetwork(n.platform, { enabled: !n.enabled })
                       }
                       className={`rounded-full px-3 py-1 text-xs ${n.enabled ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"}`}
                     >

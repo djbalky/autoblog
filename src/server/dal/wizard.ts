@@ -187,13 +187,17 @@ export async function createBlogAndBackbone(
   const name = payload.basic.name.trim();
   const slug = payload.basic.slug.trim();
 
-  // Slug uniqueness is enforced at the DB level (UNIQUE on blogs.slug). If the
-  // user's configured slug is already taken, append a short suffix so we never
-  // fail with a fake result — but surface it in the returned slug.
+  // Slug uniqueness is enforced at the DB level (UNIQUE on blogs.slug). Reject a
+  // taken slug up front with a clear message — before any row is written — so a
+  // duplicate never half-creates a blog and never silently rewrites the URL the
+  // user asked for.
   const taken = await get<{ id: number }>("SELECT id FROM blogs WHERE slug = ?", slug);
-  const finalSlug = taken
-    ? `${slug}-${Math.random().toString(36).slice(2, 8)}`
-    : slug;
+  if (taken) {
+    throw new Error(
+      `The URL slug "/${slug}" is already taken by another blog. Choose a different slug in step 1.`
+    );
+  }
+  const finalSlug = slug;
 
   // ---- 1. blogs row -------------------------------------------------------
   const blogInfo = await run(
