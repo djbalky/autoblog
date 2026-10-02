@@ -20,8 +20,16 @@ function Home() {
           control through a WordPress-class CMS dashboard.
         </p>
         <p className="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
-          Phase 1 foundation: persistent database, authentication with roles, and a
-          real dashboard wired to the database.
+          The guided 10-step blog creation wizard is live: sign in and open{" "}
+          <Link to="/blogs/new" className="underline hover:text-neutral-800 dark:hover:text-white">
+            Create blog
+          </Link>{" "}
+          to set up a blog — it writes a real blog, settings, pages and navigation
+          to the database and gives it a dashboard at{" "}
+          <code className="rounded bg-neutral-100 px-1 py-0.5 dark:bg-neutral-800">
+            /blogs/&lt;id&gt;
+          </code>
+          .
         </p>
       </div>
       <div className="flex gap-3">
@@ -36,6 +44,12 @@ function Home() {
           className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
         >
           Create account
+        </Link>
+        <Link
+          to="/blogs/new"
+          className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+        >
+          Create blog
         </Link>
       </div>
     </main>

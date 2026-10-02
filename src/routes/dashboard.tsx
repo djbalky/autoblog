@@ -14,19 +14,33 @@ export const Route = createFileRoute("/dashboard")({
     user: PublicUser;
     blogCount: number;
     postCount: number;
+    storage: "postgres" | "sqlite";
     blogs: BlogWithCount[];
   }> => {
     const { user } = await currentUserAction();
     if (!user) throw redirect({ to: "/login" });
     const stats = await dashboardStatsAction();
     const blogs = await myBlogsAction();
-    return { user, blogCount: stats.blogCount, postCount: stats.postCount, blogs };
+    return {
+      user,
+      blogCount: stats.blogCount,
+      postCount: stats.postCount,
+      storage: stats.storage,
+      blogs,
+    };
   },
   component: Dashboard,
 });
 
+const STORAGE_LABEL: Record<"postgres" | "sqlite", string> = {
+  postgres: "Postgres (Neon) — the production database",
+  sqlite: "the local SQLite development database (dev fallback, no DATABASE_URL set)",
+};
+
 function Dashboard() {
-  const { user, blogCount, postCount, blogs } = useLoaderData({ from: "/dashboard" });
+  const { user, blogCount, postCount, storage, blogs } = useLoaderData({
+    from: "/dashboard",
+  });
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -49,6 +63,12 @@ function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Link
+              to="/blogs/new"
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-white dark:text-neutral-900"
+            >
+              Create blog
+            </Link>
             <span className="text-sm text-neutral-600 dark:text-neutral-300">
               {user.displayName}
               <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
@@ -71,11 +91,19 @@ function Dashboard() {
           Welcome back, {user.displayName}
         </h2>
         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          Dashboard reads directly from the persistent SQLite database.
+          This dashboard reads live from {STORAGE_LABEL[storage]}. Nothing here is
+          mock data.
+        </p>
+        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+          The guided blog creation wizard is live: <b>Create blog</b> opens{" "}
+          <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-800">
+            /blogs/new
+          </code>{" "}
+          and walks through all 10 steps, saving a real blog to the database.
         </p>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Metric label="Blogs" value={blogCount} />
+          <Metric label="Your blogs" value={blogCount} />
           <Metric label="Posts" value={postCount} />
           <Metric label="Your role" value={user.roles[0] ?? "—"} />
         </div>
@@ -85,33 +113,49 @@ function Dashboard() {
             <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               Your blogs
             </h3>
-            <span className="text-xs text-neutral-400">
-              Blog wizard arrives in Phase 2
-            </span>
+            <Link
+              to="/blogs/new"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            >
+              + Create blog
+            </Link>
           </div>
           {blogs.length === 0 ? (
-            <p className="mt-3 rounded-md border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
-              You don’t have any blogs yet. Phase 2 adds the guided blog creation
-              wizard.
-            </p>
+            <div className="mt-3 rounded-md border border-dashed border-neutral-300 p-6 text-center dark:border-neutral-700">
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                You don’t have any blogs yet — this list is empty because the
+                database has no blog rows for your account, not because the feature
+                is missing.
+              </p>
+              <Link
+                to="/blogs/new"
+                className="mt-4 inline-block rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white dark:bg-white dark:text-neutral-900"
+              >
+                Create your first blog
+              </Link>
+            </div>
           ) : (
             <ul className="mt-3 space-y-2">
               {blogs.map((b) => (
-                <li
-                  key={b.id}
-                  className="rounded-md border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-neutral-900 dark:text-white">
-                      {b.name}
-                    </span>
-                    <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                      /{b.slug}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                    {b.post_count} post{b.post_count === 1 ? "" : "s"} · {b.status}
-                  </p>
+                <li key={b.id}>
+                  <Link
+                    to="/blogs/$blogId"
+                    params={{ blogId: String(b.id) }}
+                    className="block rounded-md border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-neutral-900 dark:text-white">
+                        {b.name}
+                      </span>
+                      <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                        /{b.slug}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                      {b.post_count} post{b.post_count === 1 ? "" : "s"} · {b.status}{" "}
+                      · blog #{b.id} · open →
+                    </p>
+                  </Link>
                 </li>
               ))}
             </ul>
