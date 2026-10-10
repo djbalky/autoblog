@@ -14,6 +14,7 @@ import { ensureInitialized } from "../init";
 import { getDashboardStats } from "../dal/users";
 import { listBlogsForUser } from "../dal/blogs";
 import { logActivity } from "../dal/activity";
+import { usingPostgres } from "../store";
 
 interface Credentials {
   email: string;
@@ -94,12 +95,23 @@ export const currentUserAction = createServerFn().handler(
 // ---- Dashboard stats ------------------------------------------------------
 
 export const dashboardStatsAction = createServerFn().handler(
-  async (): Promise<{ user: PublicUser; blogCount: number; postCount: number }> => {
+  async (): Promise<{
+    user: PublicUser;
+    blogCount: number;
+    postCount: number;
+    /** Which storage backend the request actually hit (store.ts switch). */
+    storage: "postgres" | "sqlite";
+  }> => {
     await ensureInitialized();
     const user = await currentUser();
     if (!user) throw new Error("NOT_AUTHENTICATED");
     const { blogCount, postCount } = await getDashboardStats(user.id);
-    return { user, blogCount, postCount };
+    return {
+      user,
+      blogCount,
+      postCount,
+      storage: usingPostgres() ? "postgres" : "sqlite",
+    };
   }
 );
 
