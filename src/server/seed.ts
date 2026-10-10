@@ -8,6 +8,7 @@
 import { nowIso, run, get } from "./store";
 import { hashPassword } from "./auth";
 import { ROLES, ROLE_PERMISSIONS, ALL_PERMISSIONS, type RoleName } from "./roles";
+import { PLAN_SEEDS } from "./plans";
 export type { RoleName };
 export { ROLES };
 export const DEFAULT_ADMIN_EMAIL =
@@ -55,7 +56,19 @@ export async function seed(): Promise<void> {
       );
     }
   }
-  // 3. Default owner account (idempotent; only when none exists yet)
+  // 4. Plans (billing/usage foundation). INSERT OR IGNORE: an existing plan row
+  // is never overwritten, so operator edits in the DB survive every boot.
+  for (const plan of PLAN_SEEDS) {
+    await run(
+      "INSERT OR IGNORE INTO plans (key, name, monthly_price_cents, limits, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+      plan.key,
+      plan.name,
+      plan.monthly_price_cents,
+      JSON.stringify(plan.limits),
+      now
+    );
+  }
+  // 5. Default owner account (idempotent; only when none exists yet)
   const existing = await get<{ id: number }>(
     "SELECT id FROM users WHERE email = ?",
     DEFAULT_ADMIN_EMAIL

@@ -15,6 +15,100 @@
  */
 export const PG_SCHEMA_NAME = "autonoblog-v1";
 
+/**
+ * Foundation extension (Phase 1 follow-on): billing/usage + the ContentJob
+ * pipeline tracking core. Single source of truth: these statements are spread
+ * at the end of PG_SCHEMA_STATEMENTS (so a fresh database gets them) AND run
+ * unconditionally by migrate() on every boot (so databases migrated before this
+ * phase get them too). Every statement is idempotent.
+ *
+ * Nothing here is billed or charged: `plans`/`subscriptions`/`usage_records`/
+ * `credit_transactions` only record what exists. Pricing is decided later.
+ */
+export const PG_EXTENSION_STATEMENTS: string[] = [
+  // ---- Billing & usage ----------------------------------------------------
+  `CREATE TABLE IF NOT EXISTS plans (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    key                 TEXT NOT NULL UNIQUE,
+    name                TEXT NOT NULL,
+    monthly_price_cents INTEGER NOT NULL DEFAULT 0,
+    limits              TEXT NOT NULL DEFAULT '{}',
+    active              INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_plans_active ON plans(active)`,
+
+  `CREATE TABLE IF NOT EXISTS subscriptions (
+    id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id              BIGINT NOT NULL REFERENCES plans(id),
+    status               TEXT NOT NULL DEFAULT 'active',
+    current_period_start TEXT NOT NULL,
+    current_period_end   TEXT NOT NULL,
+    cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_subscriptions_plan ON subscriptions(plan_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status)`,
+
+  `CREATE TABLE IF NOT EXISTS usage_records (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    metric       TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end   TEXT NOT NULL,
+    amount       BIGINT NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL,
+    UNIQUE (user_id, metric, period_start, period_end)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_usage_records_user ON usage_records(user_id, metric)`,
+
+  `CREATE TABLE IF NOT EXISTS credit_transactions (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount     BIGINT NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    reference  TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_credit_transactions_reference ON credit_transactions(reference)`,
+
+  // ---- ContentJob pipeline (ContentJob -> AgentRuns -> Post -> ...) -------
+  `CREATE TABLE IF NOT EXISTS content_jobs (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    blog_id        BIGINT NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+    target_post_id BIGINT REFERENCES posts(id) ON DELETE SET NULL,
+    status         TEXT NOT NULL DEFAULT 'research',
+    current_agent  TEXT,
+    started_at     TEXT NOT NULL,
+    deadline       TEXT,
+    result         TEXT NOT NULL DEFAULT '',
+    error          TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_content_jobs_blog_status ON content_jobs(blog_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_content_jobs_status_deadline ON content_jobs(status, deadline)`,
+  `CREATE INDEX IF NOT EXISTS idx_content_jobs_created ON content_jobs(created_at)`,
+
+  `CREATE TABLE IF NOT EXISTS content_job_events (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    job_id     BIGINT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+    agent      TEXT,
+    action     TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_content_job_events_job ON content_job_events(job_id)`,
+
+  // Every agent run can be attributed to the ContentJob that caused it.
+  `ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS content_job_id BIGINT REFERENCES content_jobs(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(content_job_id)`,
+];
+
 export const PG_SCHEMA_STATEMENTS: string[] = [
   // ---- Auth & roles -------------------------------------------------------
   `CREATE TABLE IF NOT EXISTS users (
@@ -470,4 +564,8 @@ export const PG_SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, is_read)`,
+
+  // ---- Foundation extension (billing/usage + ContentJob pipeline) ---------
+  // Spread last: `content_jobs` must exist before the `agent_runs` ALTER.
+  ...PG_EXTENSION_STATEMENTS,
 ];
