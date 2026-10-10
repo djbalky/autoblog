@@ -38,7 +38,8 @@ export async function getDashboardStats(
         .join(",")})`,
       ...ids
     );
-    postCount = row?.n ?? 0;
+    // Postgres returns COUNT(*) as bigint (a string) — coerce to a real number.
+    postCount = Number(row?.n ?? 0) || 0;
   }
   return { userId, blogCount: blogs.length, postCount };
 }

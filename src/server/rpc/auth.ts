@@ -12,7 +12,7 @@ import {
 } from "../auth-context";
 import { ensureInitialized } from "../init";
 import { getDashboardStats } from "../dal/users";
-import { listBlogsForUser } from "../dal/blogs";
+import { listBlogsForUser, listBlogCardsForUser } from "../dal/blogs";
 import { logActivity } from "../dal/activity";
 import { usingPostgres } from "../store";
 
@@ -120,4 +120,16 @@ export const myBlogsAction = createServerFn().handler(async () => {
   const user = await currentUser();
   if (!user) throw new Error("NOT_AUTHENTICATED");
   return listBlogsForUser(user.id);
+});
+
+/**
+ * Phase 3 — dashboard blog gallery.
+ * Returns only the blogs the *current session user* is a member of
+ * (blog_members scoping), each with real counters + blog_settings summary.
+ */
+export const myBlogCardsAction = createServerFn().handler(async () => {
+  await ensureInitialized();
+  const user = await currentUser();
+  if (!user) throw new Error("NOT_AUTHENTICATED");
+  return listBlogCardsForUser(user.id);
 });
