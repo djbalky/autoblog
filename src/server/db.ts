@@ -55,6 +55,18 @@ export function migrate(db: Database): void {
       db.exec(stmt);
     }
     ensureColumn(db, "blog_settings", "config", "TEXT NOT NULL DEFAULT ''");
+    // Foundation extension: attribute agent runs to the ContentJob that caused
+    // them. Column first, then its index (the index cannot be created before
+    // the column exists on an already-migrated database).
+    ensureColumn(
+      db,
+      "agent_runs",
+      "content_job_id",
+      "INTEGER REFERENCES content_jobs(id) ON DELETE SET NULL"
+    );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(content_job_id)"
+    );
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

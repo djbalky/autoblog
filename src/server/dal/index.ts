@@ -9,3 +9,5 @@ export * from "./users";
 export * from "./activity";
 export * from "./media";
 export * from "./wizard";
+export * from "./billing";
+export * from "./contentJobs";

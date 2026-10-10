@@ -18,7 +18,11 @@
  * The value is never logged.
  */
 import { neon } from "@neondatabase/serverless";
-import { PG_SCHEMA_NAME, PG_SCHEMA_STATEMENTS } from "./pgSchema";
+import {
+  PG_EXTENSION_STATEMENTS,
+  PG_SCHEMA_NAME,
+  PG_SCHEMA_STATEMENTS,
+} from "./pgSchema";
 
 export type Row = Record<string, unknown>;
 
@@ -200,4 +204,12 @@ export async function migrate(): Promise<void> {
   await q.query(
     `ALTER TABLE blog_settings ADD COLUMN IF NOT EXISTS config TEXT NOT NULL DEFAULT ''`
   );
+  // Foundation extension (billing/usage tables, ContentJob pipeline tables and
+  // the agent_runs.content_job_id column). Databases migrated before this phase
+  // already have a schema_migrations row, so the guarded block above is skipped
+  // for them; these statements are individually idempotent and therefore run on
+  // every boot, which is what brings an existing database up to date.
+  for (const stmt of PG_EXTENSION_STATEMENTS) {
+    await q.query(stmt);
+  }
 }
