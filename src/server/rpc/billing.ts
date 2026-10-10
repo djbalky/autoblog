@@ -75,7 +75,7 @@ export const getBillingOverview = createServerFn({ method: "GET" }).handler(
           plan: summary.plan,
           subscription: summary.subscription,
           usage: summary,
-          credits: { balance: credits, ...summary.credits },
+          credits: { ...summary.credits, balance: credits },
           creditHistory: history,
           availablePlans: plans,
           paymentProcessor: {
