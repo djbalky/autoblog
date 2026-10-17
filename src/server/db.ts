@@ -55,6 +55,11 @@ export function migrate(db: Database): void {
       db.exec(stmt);
     }
     ensureColumn(db, "blog_settings", "config", "TEXT NOT NULL DEFAULT ''");
+    // Phase 4: posts.scheduled_at — the scheduler column (Phase 6 writes it).
+    ensureColumn(db, "posts", "scheduled_at", "TEXT");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_posts_scheduled ON posts(scheduled_at)"
+    );
     // Foundation extension: attribute agent runs to the ContentJob that caused
     // them. Column first, then its index (the index cannot be created before
     // the column exists on an already-migrated database).
