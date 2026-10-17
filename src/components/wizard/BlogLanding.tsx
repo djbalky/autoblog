@@ -34,6 +34,13 @@ export function BlogLanding() {
               {user.displayName}
             </span>
             <Link
+              to="/blogs/$blogId/posts"
+              params={{ blogId: String(blog.id) }}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              Posts
+            </Link>
+            <Link
               to="/dashboard"
               className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
             >
@@ -79,6 +86,35 @@ export function BlogLanding() {
           <Card k="Auto-publish" v={settings?.auto_publish ? "ON" : "OFF"} />
           <Card k="Monetization" v={settings?.monetization_active ? "ON" : "OFF"} />
         </dl>
+
+        <section className="mt-8">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <div>
+              <h3 className="text-sm font-semibold text-neutral-900 dark:text-white">Posts</h3>
+              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                Write, publish, schedule and version posts with the block editor. Everything is
+                stored in the <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">posts</code>{" "}
+                and <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">post_revisions</code> tables.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Link
+                to="/blogs/$blogId/posts"
+                params={{ blogId: String(blog.id) }}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              >
+                All posts →
+              </Link>
+              <Link
+                to="/blogs/$blogId/posts/$postId"
+                params={{ blogId: String(blog.id), postId: "new" }}
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900"
+              >
+                + New post
+              </Link>
+            </div>
+          </div>
+        </section>
 
         <section className="mt-8">
           <h3 className="text-sm font-semibold text-neutral-900 dark:text-white">

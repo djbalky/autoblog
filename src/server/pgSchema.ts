@@ -26,6 +26,9 @@ export const PG_SCHEMA_NAME = "autonoblog-v1";
  * `credit_transactions` only record what exists. Pricing is decided later.
  */
 export const PG_EXTENSION_STATEMENTS: string[] = [
+  // ---- Phase 4: posts.scheduled_at (scheduler column) ----------------------
+  `ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_scheduled ON posts(scheduled_at)`,
   // ---- Billing & usage ----------------------------------------------------
   `CREATE TABLE IF NOT EXISTS plans (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -256,6 +259,7 @@ export const PG_SCHEMA_STATEMENTS: string[] = [
     status        TEXT NOT NULL DEFAULT 'draft',
     featured_media_id BIGINT REFERENCES media(id) ON DELETE SET NULL,
     published_at  TEXT,
+    scheduled_at  TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     UNIQUE (blog_id, slug)
