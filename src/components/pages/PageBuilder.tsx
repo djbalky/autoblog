@@ -23,7 +23,6 @@ import {
   serializeBlocks,
   suggestExcerpt,
   type Block,
-  type BlockType,
   type PageBlockType,
 } from "../blocks/types";
 import { RenderBlocks } from "../blocks/renderBlocks";
