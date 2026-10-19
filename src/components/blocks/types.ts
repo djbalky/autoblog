@@ -14,6 +14,38 @@
 
 export type BlockType = "paragraph" | "heading" | "list" | "quote" | "image";
 
+// ---- Page-builder blocks (Phase 4b) ---------------------------------------
+// Pages and posts share ONE block envelope and ONE renderer. The four block
+// types below are what a *page* additionally offers (landing-page furniture);
+// a post may technically carry them too — the renderer handles both — they are
+// simply not offered in the post palette.
+
+export interface HeroBlock {
+  id: string;
+  type: "hero";
+  data: { headline: string; subtext: string; bg: string };
+}
+export interface TwoColumnBlock {
+  id: string;
+  type: "two-column";
+  data: { left: string; right: string };
+}
+export interface CtaBlock {
+  id: string;
+  type: "cta";
+  data: { title: string; buttonLabel: string; url: string };
+}
+export interface SpacerBlock {
+  id: string;
+  type: "spacer";
+  data: { height: number };
+}
+
+/** Every block type the page builder can create. */
+export type PageBlockType = BlockType | "hero" | "two-column" | "cta" | "spacer";
+
+export const PAGE_ONLY_BLOCK_TYPES: PageBlockType[] = ["hero", "two-column", "cta", "spacer"];
+
 export interface ParagraphBlock {
   id: string;
   type: "paragraph";
@@ -45,7 +77,11 @@ export type Block =
   | HeadingBlock
   | ListBlock
   | QuoteBlock
-  | ImageBlock;
+  | ImageBlock
+  | HeroBlock
+  | TwoColumnBlock
+  | CtaBlock
+  | SpacerBlock;
 
 export const BLOCK_VERSION = 1;
 
@@ -56,7 +92,7 @@ export function newBlockId(): string {
   return `b${Date.now().toString(36)}${seq.toString(36)}`;
 }
 
-export function createBlock(type: BlockType): Block {
+export function createBlock(type: PageBlockType | BlockType): Block {
   const id = newBlockId();
   switch (type) {
     case "heading":
@@ -67,6 +103,14 @@ export function createBlock(type: BlockType): Block {
       return { id, type, data: { text: "", cite: "" } };
     case "image":
       return { id, type, data: { url: "", alt: "", caption: "" } };
+    case "hero":
+      return { id, type, data: { headline: "", subtext: "", bg: "#f5f5f5" } };
+    case "two-column":
+      return { id, type, data: { left: "", right: "" } };
+    case "cta":
+      return { id, type, data: { title: "", buttonLabel: "Learn more", url: "" } };
+    case "spacer":
+      return { id, type, data: { height: 48 } };
     case "paragraph":
     default:
       return { id, type: "paragraph", data: { text: "" } };
@@ -113,33 +157,81 @@ function coerceBlock(raw: unknown, index: number): Block | null {
           caption: String(data.caption ?? ""),
         },
       };
+    case "hero":
+      return {
+        id,
+        type,
+        data: {
+          headline: String(data.headline ?? ""),
+          subtext: String(data.subtext ?? ""),
+          bg: String(data.bg ?? "#f5f5f5"),
+        },
+      };
+    case "two-column":
+      return {
+        id,
+        type,
+        data: { left: String(data.left ?? ""), right: String(data.right ?? "") },
+      };
+    case "cta":
+      return {
+        id,
+        type,
+        data: {
+          title: String(data.title ?? ""),
+          buttonLabel: String(data.buttonLabel ?? ""),
+          url: String(data.url ?? ""),
+        },
+      };
+    case "spacer": {
+      const h = Number(data.height);
+      return { id, type, data: { height: Number.isFinite(h) && h >= 0 ? Math.min(h, 400) : 48 } };
+    }
     default:
       return null;
   }
+}
+
+export interface ContentMeta {
+  /**
+   * Page excerpt. `pages` has no excerpt column (and Phase 4b may not add one),
+   * so the page builder stores it in the same JSON envelope as the blocks —
+   * `{ version, excerpt, blocks: [...] }`. Readers that ignore it (the post
+   * editor, the renderer) are unaffected.
+   */
+  excerpt?: string;
 }
 
 export interface ParsedContent {
   blocks: Block[];
   /** True when the stored text was not block JSON and is being shown as text. */
   legacyText: boolean;
+  /** Envelope metadata (currently the page excerpt). Never invented. */
+  meta: ContentMeta;
 }
 
 /** Parse the `posts.content` column into blocks (never throws). */
 export function parseBlocks(content: string | null | undefined): ParsedContent {
   const text = (content ?? "").trim();
-  if (!text) return { blocks: [], legacyText: false };
+  if (!text) return { blocks: [], legacyText: false, meta: {} };
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
       const parsed = JSON.parse(text) as unknown;
       const rawBlocks = Array.isArray(parsed)
         ? parsed
         : ((parsed as { blocks?: unknown }).blocks as unknown[]) ?? [];
+      const rawMeta = Array.isArray(parsed)
+        ? {}
+        : ((parsed as { meta?: Record<string, unknown> }).meta ??
+          (parsed as Record<string, unknown>));
       if (Array.isArray(rawBlocks)) {
         const blocks = rawBlocks
           .map((b, i) => coerceBlock(b, i))
           .filter((b): b is Block => b !== null);
         if (blocks.length > 0 || rawBlocks.length === 0) {
-          return { blocks, legacyText: false };
+          const excerpt =
+            typeof rawMeta?.excerpt === "string" ? String(rawMeta.excerpt) : "";
+          return { blocks, legacyText: false, meta: excerpt ? { excerpt } : {} };
         }
       }
     } catch {
@@ -149,15 +241,25 @@ export function parseBlocks(content: string | null | undefined): ParsedContent {
   return {
     blocks: [{ id: "legacy-0", type: "paragraph", data: { text } }],
     legacyText: true,
+    meta: {},
   };
 }
 
-/** Serialise blocks for storage in `posts.content`. */
-export function serializeBlocks(blocks: Block[]): string {
-  return JSON.stringify({
+/** Wrap the envelope shape (version + optional meta + blocks). */
+function wrap(blocks: Block[], meta?: ContentMeta): string {
+  const envelope: Record<string, unknown> = {
     version: BLOCK_VERSION,
     blocks: blocks.map((b) => ({ id: b.id, type: b.type, data: b.data })),
-  });
+  };
+  if (meta && typeof meta.excerpt === "string" && meta.excerpt !== "") {
+    envelope.excerpt = meta.excerpt;
+  }
+  return JSON.stringify(envelope);
+}
+
+/** Serialise blocks for storage in `posts.content` / `pages.content`. */
+export function serializeBlocks(blocks: Block[], meta?: ContentMeta): string {
+  return wrap(blocks, meta);
 }
 
 /** Plain-text extraction, used for auto-excerpts and list previews. */
@@ -170,6 +272,12 @@ export function blocksToText(blocks: Block[]): string {
       parts.push(b.data.items.join(" "));
     } else if (b.type === "image") {
       if (b.data.alt) parts.push(b.data.alt);
+    } else if (b.type === "hero") {
+      parts.push(b.data.headline, b.data.subtext);
+    } else if (b.type === "two-column") {
+      parts.push(b.data.left, b.data.right);
+    } else if (b.type === "cta") {
+      parts.push(b.data.title, b.data.buttonLabel);
     }
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();

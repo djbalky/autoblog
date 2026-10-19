@@ -208,6 +208,90 @@ function BlockView({
         </figure>
       );
     }
+    case "hero": {
+      const headline = block.data.headline.trim();
+      const subtext = block.data.subtext.trim();
+      if (!headline && !subtext) {
+        return mode === "preview" ? (
+          <p className="text-sm italic text-neutral-400">Empty hero block</p>
+        ) : null;
+      }
+      const bg = /^#[0-9a-f]{3,8}$/i.test(block.data.bg) ? block.data.bg : "#f5f5f5";
+      return (
+        <section
+          className="rounded-xl border border-neutral-200 px-6 py-10 text-center"
+          style={{ backgroundColor: bg }}
+        >
+          {headline ? (
+            <h1 className="text-3xl font-bold tracking-tight text-neutral-900">
+              {renderInline(headline, k)}
+            </h1>
+          ) : null}
+          {subtext ? (
+            <p className="mx-auto mt-3 max-w-2xl text-base text-neutral-700">
+              {withBreaks(subtext, `${k}-sub`)}
+            </p>
+          ) : null}
+        </section>
+      );
+    }
+    case "two-column": {
+      const left = block.data.left.trim();
+      const right = block.data.right.trim();
+      if (!left && !right) {
+        return mode === "preview" ? (
+          <p className="text-sm italic text-neutral-400">Empty two-column block</p>
+        ) : null;
+      }
+      return (
+        <div className="grid gap-6 sm:grid-cols-2">
+          <div>{withBreaks(left, `${k}-l`)}</div>
+          <div>{withBreaks(right, `${k}-r`)}</div>
+        </div>
+      );
+    }
+    case "cta": {
+      const title = block.data.title.trim();
+      const label = block.data.buttonLabel.trim();
+      const url = block.data.url.trim();
+      const linkable = SAFE_HREF.test(url) && url !== "/" && url !== "#";
+      if (!title && !(linkable && label)) {
+        return mode === "preview" ? (
+          <p className="text-sm italic text-neutral-400">
+            Empty CTA block{url && !linkable ? " — button URL must start with http(s)://" : ""}
+          </p>
+        ) : null;
+      }
+      return (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-6 py-8 text-center">
+          {title ? (
+            <h2 className="text-2xl font-bold tracking-tight text-emerald-900">
+              {renderInline(title, k)}
+            </h2>
+          ) : null}
+          {linkable && label ? (
+            <a
+              href={url}
+              target={url.startsWith("http") ? "_blank" : undefined}
+              rel="noopener noreferrer"
+              className="mt-4 inline-block rounded-md bg-emerald-600 px-5 py-2.5 font-medium text-white hover:bg-emerald-700"
+            >
+              {label}
+            </a>
+          ) : mode === "preview" ? (
+            <p className="mt-3 text-xs text-emerald-800">
+              {label ? "Button URL missing" : "Button label missing"} — nothing is rendered until
+              the CTA has both a label and a real http(s) URL.
+            </p>
+          ) : null}
+        </section>
+      );
+    }
+    case "spacer": {
+      const height = Number(block.data.height);
+      const px = Number.isFinite(height) && height > 0 ? Math.min(height, 400) : 48;
+      return <div aria-hidden="true" style={{ height: `${px}px` }} />;
+    }
     case "paragraph":
     default: {
       const text = block.data.text;
