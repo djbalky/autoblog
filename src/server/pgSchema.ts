@@ -129,6 +129,35 @@ export const PG_EXTENSION_STATEMENTS: string[] = [
   // Every agent run can be attributed to the ContentJob that caused it.
   `ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS content_job_id BIGINT REFERENCES content_jobs(id) ON DELETE SET NULL`,
   `CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(content_job_id)`,
+
+  // ---- Phase 5a: media library -------------------------------------------
+  // `media` is part of the original v1 schema, but the per-blog media library
+  // needs a boot-time guarantee that the table (and the columns it writes) are
+  // there — every statement below is idempotent and runs on the extension path,
+  // which executes on EVERY boot even when the v1 migration row already exists.
+  `CREATE TABLE IF NOT EXISTS media (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    blog_id     BIGINT NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+    uploader_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    file_name   TEXT NOT NULL,
+    file_path   TEXT NOT NULL,
+    mime_type   TEXT NOT NULL DEFAULT '',
+    size_bytes  BIGINT NOT NULL DEFAULT 0,
+    alt_text    TEXT NOT NULL DEFAULT '',
+    width       BIGINT,
+    height      BIGINT,
+    created_at  TEXT NOT NULL
+  )`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS width BIGINT`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS height BIGINT`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS alt_text TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE media ADD COLUMN IF NOT EXISTS uploader_id BIGINT REFERENCES users(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_media_blog ON media(blog_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_media_uploader ON media(uploader_id)`,
+  // The library always reads a blog's media newest-first.
+  `CREATE INDEX IF NOT EXISTS idx_media_blog_created ON media(blog_id, created_at DESC)`,
 ];
 
 export const PG_SCHEMA_STATEMENTS: string[] = [

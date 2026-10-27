@@ -82,6 +82,17 @@ export function migrate(db: Database): void {
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(content_job_id)"
     );
+    // Phase 5a: media library columns. `media` is created by SCHEMA_STATEMENTS,
+    // so only the columns the library writes need a PRAGMA-guarded add (indexes
+    // come after their columns — an index on a missing column fails).
+    ensureColumn(db, "media", "width", "INTEGER");
+    ensureColumn(db, "media", "height", "INTEGER");
+    ensureColumn(db, "media", "alt_text", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "media", "mime_type", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "media", "size_bytes", "INTEGER NOT NULL DEFAULT 0");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_media_blog_created ON media(blog_id, created_at DESC)"
+    );
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
