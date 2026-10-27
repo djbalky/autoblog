@@ -22,3 +22,4 @@ src/routeTree.gen.ts
 
 # Local SQLite database + WAL files (created at runtime)
 /data/
+smoke*.log
