@@ -69,7 +69,20 @@ export interface QuoteBlock {
 export interface ImageBlock {
   id: string;
   type: "image";
-  data: { url: string; alt: string; caption?: string };
+  data: {
+    url: string;
+    alt: string;
+    caption?: string;
+    /**
+     * Phase 5b: id of the `media` row this image came from, when it was picked
+     * out of the blog's media library. Optional and purely additive — an image
+     * inserted by pasting a URL has no `mediaId`, and content saved before
+     * Phase 5b parses unchanged (the field is simply absent). It is what makes
+     * the "is this media still referenced?" query exact instead of guessing
+     * from the URL.
+     */
+    mediaId?: number;
+  };
 }
 
 export type Block =
@@ -90,6 +103,33 @@ let seq = 0;
 export function newBlockId(): string {
   seq += 1;
   return `b${Date.now().toString(36)}${seq.toString(36)}`;
+}
+
+/**
+ * Coerce an unknown value into a real media id (positive integer) or null.
+ * Used by `coerceBlock` so old content and hand-edited JSON can never smuggle a
+ * non-numeric "id" into the block.
+ */
+export function mediaIdFrom(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+/**
+ * Every media-library id referenced by the given blocks. This is the shared
+ * definition of "referenced": the media library's delete guard parses a post's
+ * or page's stored content with `parseBlocks` and then calls this, so the count
+ * shown to the user comes from the exact same reading of the content the editor
+ * and the renderer use.
+ */
+export function mediaIdsInBlocks(blocks: Block[]): number[] {
+  const out: number[] = [];
+  for (const b of blocks) {
+    if (b.type === "image" && b.data.mediaId) out.push(b.data.mediaId);
+  }
+  return out;
 }
 
 export function createBlock(type: PageBlockType | BlockType): Block {
@@ -155,6 +195,11 @@ function coerceBlock(raw: unknown, index: number): Block | null {
           url: String(data.url ?? ""),
           alt: String(data.alt ?? ""),
           caption: String(data.caption ?? ""),
+          // Only a positive integer is a real media id; anything else (absent,
+          // null, "", 0, "abc", 12.5) is dropped so old/foreign content parses.
+          ...(mediaIdFrom(data.mediaId) !== null
+            ? { mediaId: mediaIdFrom(data.mediaId) as number }
+            : {}),
         },
       };
     case "hero":
