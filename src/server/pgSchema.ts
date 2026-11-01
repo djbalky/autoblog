@@ -29,6 +29,25 @@ export const PG_EXTENSION_STATEMENTS: string[] = [
   // ---- Phase 4: posts.scheduled_at (scheduler column) ----------------------
   `ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_posts_scheduled ON posts(scheduled_at)`,
+  // ---- Phase 4b: pages lifecycle columns + page revisions ------------------
+  // `pages` already exists in the v1 schema without a lifecycle, so the two
+  // columns arrive as an extension and the ALTER ... IF NOT EXISTS runs on
+  // every boot (idempotent on Neon).
+  `ALTER TABLE pages ADD COLUMN IF NOT EXISTS published_at TEXT`,
+  `ALTER TABLE pages ADD COLUMN IF NOT EXISTS scheduled_at TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_pages_scheduled ON pages(scheduled_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_pages_blog_status ON pages(blog_id, status)`,
+  `CREATE TABLE IF NOT EXISTS page_revisions (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    page_id         BIGINT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    content         TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    author_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE (page_id, revision_number)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_page_revisions_page ON page_revisions(page_id)`,
   // ---- Billing & usage ----------------------------------------------------
   `CREATE TABLE IF NOT EXISTS plans (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

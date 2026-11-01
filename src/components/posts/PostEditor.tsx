@@ -28,7 +28,7 @@ import {
 } from "../../server/rpc/posts";
 import type { PostRevisionRow, PostRow, PostStatus } from "../../server/dal/posts";
 
-const BLOCK_LABELS: Record<BlockType, string> = {
+const BLOCK_LABELS: Record<string, string> = {
   paragraph: "Paragraph",
   heading: "Heading",
   list: "List",

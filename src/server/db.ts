@@ -60,6 +60,16 @@ export function migrate(db: Database): void {
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_posts_scheduled ON posts(scheduled_at)"
     );
+    // Phase 4b: pages lifecycle columns. page_revisions itself is created by
+    // SCHEMA_STATEMENTS above; only the two late columns need a PRAGMA check.
+    ensureColumn(db, "pages", "published_at", "TEXT");
+    ensureColumn(db, "pages", "scheduled_at", "TEXT");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pages_scheduled ON pages(scheduled_at)"
+    );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pages_blog_status ON pages(blog_id, status)"
+    );
     // Foundation extension: attribute agent runs to the ContentJob that caused
     // them. Column first, then its index (the index cannot be created before
     // the column exists on an already-migrated database).

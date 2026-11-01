@@ -210,6 +210,22 @@ export const SCHEMA_STATEMENTS: string[] = [
     UNIQUE (blog_id, slug)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_pages_blog ON pages(blog_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_pages_blog_status ON pages(blog_id, status)`,
+
+  // Phase 4b: page revisions — the same append-only history posts keep, so a
+  // page edit is always recoverable. `revision_number` is 1-based per page.
+  `
+  CREATE TABLE IF NOT EXISTS page_revisions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    content         TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    author_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE (page_id, revision_number)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_page_revisions_page ON page_revisions(page_id)`,
 
   // ---- Media --------------------------------------------------------------
   `
