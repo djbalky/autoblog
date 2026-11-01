@@ -42,13 +42,18 @@ for (let attempt = 1; ; attempt++) {
       hostname: HOST,
       async fetch(req) {
         const { pathname } = new URL(req.url);
-        // Uploaded media: /api/media/<id> is answered here from the real `media`
-        // row + the file the DAL wrote under DATA_DIR. See src/server/mediaServe.ts
-        // for why this path is not a file route in this TanStack Start version.
+        // Uploaded media: /media/<id> (Phase 5a) and the Phase-2 alias
+        // /api/media/<id> are answered here from the real `media` row + the file
+        // the DAL wrote under DATA_DIR. See src/server/mediaServe.ts for why
+        // this is not a file route in this TanStack Start version.
         const mediaId = mediaIdFromPath(pathname);
         if (mediaId !== null) {
-          const mediaRes = await serveMedia(mediaId);
-          if (mediaRes) return mediaRes;
+          const mediaRes = await serveMedia(mediaId, req.headers);
+          if (mediaRes) {
+            return req.method === "HEAD"
+              ? new Response(null, { status: mediaRes.status, headers: mediaRes.headers })
+              : mediaRes;
+          }
         }
         if (pathname !== "/") {
           const file = Bun.file(CLIENT_DIR + pathname);
