@@ -11,9 +11,10 @@ import { Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import {
   mediaDeleteAction,
+  mediaReferencesAction,
   mediaUploadAction,
 } from "../../server/rpc/media";
-import type { MediaListItem, MediaUsage } from "../../server/dal/media";
+import type { MediaListItem, MediaReferenceSummary, MediaUsage } from "../../server/dal/media";
 
 export interface MediaLibraryProps {
   blog: { id: number; name: string; slug: string; status: string };
@@ -67,6 +68,11 @@ export function MediaLibrary({
   const [errors, setErrors] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  // Phase 5b: the real reference count for the row being confirmed, loaded from
+  // the database before the delete is offered — never a guessed number.
+  const [refs, setRefs] = useState<MediaReferenceSummary | null>(null);
+  const [refsLoading, setRefsLoading] = useState(false);
+  const [refsError, setRefsError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const usedBytes = rows.reduce((sum, r) => sum + r.size_bytes, 0);
@@ -123,19 +129,72 @@ export function MediaLibrary({
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  async function remove(row: MediaListItem) {
+  /**
+   * Phase 5b: before offering the delete, load the REAL per-blog reference
+   * count. The count comes from `mediaReferencesForMember`, which parses the
+   * current content of this blog's posts and pages. A failure here is shown as
+   * a failure — the delete is not offered on a guess.
+   */
+  async function askDelete(row: MediaListItem) {
+    setConfirmId(row.id);
+    setRefs(null);
+    setRefsError(null);
+    setRefsLoading(true);
+    setErrors([]);
+    setNotice(null);
+    try {
+      const res = await mediaReferencesAction({
+        data: { blogId: blog.id, mediaId: row.id },
+      });
+      if (!res.ok || !res.data) {
+        setRefsError(res.error ?? "The reference count could not be read.");
+        return;
+      }
+      setRefs(res.data.references);
+    } catch (err) {
+      setRefsError((err as Error).message);
+    } finally {
+      setRefsLoading(false);
+    }
+  }
+
+  function cancelDelete() {
+    setConfirmId(null);
+    setRefs(null);
+    setRefsError(null);
+    setRefsLoading(false);
+  }
+
+  async function remove(row: MediaListItem, force: boolean) {
     setBusy(true);
     setErrors([]);
     setNotice(null);
-    const res = await mediaDeleteAction({ data: { blogId: blog.id, mediaId: row.id } });
+    const res = await mediaDeleteAction({
+      data: { blogId: blog.id, mediaId: row.id, force },
+    });
     setBusy(false);
-    setConfirmId(null);
     if (!res.ok) {
+      // A `blocked` answer means the server found live references this client
+      // did not know about (e.g. someone else just embedded the image). Show the
+      // server's real count and keep the row.
+      if (res.blocked && res.references) {
+        setRefs(res.references);
+        setErrors([res.error ?? "This image is still in use."]);
+        return;
+      }
       setErrors([res.error ?? "That media item could not be deleted."]);
+      cancelDelete();
       return;
     }
     setRows((prev) => prev.filter((r) => r.id !== row.id));
-    setNotice(`Deleted "${row.file_name}" from this blog.`);
+    cancelDelete();
+    const refCount = res.data?.references.total ?? 0;
+    setNotice(
+      `Deleted "${row.file_name}" from this blog` +
+        (refCount > 0
+          ? ` — ${refCount} post/page reference${refCount === 1 ? "" : "s"} now point at a missing image.`
+          : " (no post or page referenced it).")
+    );
   }
 
   async function copyUrl(row: MediaListItem) {
@@ -295,34 +354,123 @@ export function MediaLibrary({
                       Copy URL
                     </button>
                     {canDelete ? (
-                      confirmId === row.id ? (
-                        <span className="flex gap-1">
-                          <button
-                            onClick={() => void remove(row)}
-                            disabled={busy}
-                            className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
-                          >
-                            Confirm delete
-                          </button>
-                          <button
-                            onClick={() => setConfirmId(null)}
-                            className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
-                          >
-                            Cancel
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmId(row.id)}
-                          className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
-                        >
-                          Delete
-                        </button>
-                      )
+                      <button
+                        onClick={() => void askDelete(row)}
+                        disabled={busy}
+                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        Delete
+                      </button>
                     ) : (
                       <span className="text-[11px] text-neutral-400">delete needs media.manage</span>
                     )}
                   </div>
+
+                  {canDelete && confirmId === row.id && (
+                    <div className="mt-2 rounded-md border border-neutral-300 bg-neutral-50 p-2 text-[11px] leading-4 text-neutral-700">
+                      {refsLoading ? (
+                        <p className="flex items-center gap-1.5 text-neutral-600">
+                          <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700" />
+                          Checking whether any post or page in this blog uses this image…
+                        </p>
+                      ) : refsError ? (
+                        <>
+                          <p className="text-red-700">
+                            The reference count could not be read, so the delete is not offered:{" "}
+                            {refsError}
+                          </p>
+                          <div className="mt-2 flex gap-1">
+                            <button
+                              onClick={() => void askDelete(row)}
+                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+                            >
+                              Retry
+                            </button>
+                            <button
+                              onClick={cancelDelete}
+                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : refs && refs.total > 0 ? (
+                        <>
+                          <p className="font-medium text-red-800">
+                            Used by{" "}
+                            {[
+                              refs.post_count > 0
+                                ? `${refs.post_count} post${refs.post_count === 1 ? "" : "s"}`
+                                : null,
+                              refs.page_count > 0
+                                ? `${refs.page_count} page${refs.page_count === 1 ? "" : "s"}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" and ")}{" "}
+                            in this blog.
+                          </p>
+                          <ul className="mt-1 space-y-0.5">
+                            {refs.references.map((ref) => (
+                              <li key={`${ref.entity_type}-${ref.entity_id}`} className="truncate">
+                                <span className="rounded bg-neutral-200 px-1 text-[10px] uppercase tracking-wide">
+                                  {ref.entity_type}
+                                </span>{" "}
+                                {ref.title || "(untitled)"}{" "}
+                                <span className="text-neutral-500">({ref.status})</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {refs.truncated && (
+                            <p className="mt-1 text-neutral-500">
+                              …and {refs.total - refs.references.length} more.
+                            </p>
+                          )}
+                          <p className="mt-1 text-neutral-500">
+                            Counts cover the current content of posts and pages in this blog, not
+                            old revisions.
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            <button
+                              onClick={() => void remove(row, true)}
+                              disabled={busy}
+                              className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                            >
+                              {busy ? "Deleting…" : "Delete anyway"}
+                            </button>
+                            <button
+                              onClick={cancelDelete}
+                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p>
+                            No post or page in this blog references this file. Deleting removes the
+                            database row and the file on disk.
+                          </p>
+                          <div className="mt-2 flex gap-1">
+                            <button
+                              onClick={() => void remove(row, false)}
+                              disabled={busy}
+                              className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                            >
+                              {busy ? "Deleting…" : "Confirm delete"}
+                            </button>
+                            <button
+                              onClick={cancelDelete}
+                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </li>
             ))}
