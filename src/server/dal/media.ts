@@ -38,6 +38,7 @@ import { DATA_DIR } from "../db";
 import { nowIso, run, get, all } from "../store";
 import { ROLE_PERMISSIONS, type RoleName } from "../roles";
 import { getActiveSubscription } from "./billing";
+import { mediaIdsInBlocks, parseBlocks } from "../../components/blocks/types";
 
 const STAGING_DIR = join(DATA_DIR, "uploads", "staging");
 const mediaDirFor = (blogId: number) => join(DATA_DIR, "media", String(blogId));
@@ -589,3 +590,208 @@ export async function deleteMediaForMember(
   }
   return true;
 }
+
+// ===========================================================================
+// Phase 5b — reference audit ("is this image still used by a post or page?")
+// ===========================================================================
+
+/**
+ * One place a media row is used. `status` is included so the confirmation panel
+ * can say whether the breaking reference is a published article or a draft.
+ */
+export interface MediaReference {
+  entity_type: "post" | "page";
+  entity_id: number;
+  title: string;
+  slug: string;
+  status: string;
+}
+
+export interface MediaReferenceSummary {
+  blog_id: number;
+  media_id: number;
+  post_count: number;
+  page_count: number;
+  total: number;
+  /** The references themselves, capped at `MEDIA_REFERENCE_LIST_LIMIT`. */
+  references: MediaReference[];
+  /** True when `references` was truncated — counts are always the full counts. */
+  truncated: boolean;
+}
+
+export const MEDIA_REFERENCE_LIST_LIMIT = 20;
+
+/**
+ * Count (and list) the posts and pages **of one blog** that currently embed a
+ * media row, by parsing their stored block content with the very same
+ * `parseBlocks` the editor and the renderer use.
+ *
+ * Scoping rules, enforced here rather than trusted from the caller:
+ *  - the media row must belong to `blogId` — a media id from another blog
+ *    returns `null`, so a cross-blog id can never be counted (or block a
+ *    delete) in the wrong tenant;
+ *  - the caller must be a member of `blogId`;
+ *  - the post/page query is filtered by `blog_id`, so content in another blog
+ *    is never even read.
+ *
+ * SQL narrows with a LIKE on the serialised `"mediaId":<n>` fragment (our
+ * writer emits compact JSON), then the parse confirms the exact id — so
+ * `%"mediaId":12%` matching media 12x costs a parse, never a wrong count.
+ *
+ * What counts: the *current* content of a post or page. Old revisions are
+ * history, not live references, and are deliberately excluded — the media
+ * library says so in its confirmation text instead of implying otherwise.
+ */
+export async function mediaReferencesForMember(
+  blogId: number,
+  mediaId: number,
+  userId: number
+): Promise<MediaReferenceSummary | null> {
+  if (!Number.isFinite(blogId) || !Number.isFinite(mediaId)) return null;
+  const row = await getMediaForMember(mediaId, userId);
+  // Cross-blog guard: the row must actually live in THIS blog.
+  if (!row || Number(row.blog_id) !== Number(blogId)) return null;
+
+  const likeExact = `%"mediaId":${mediaId}%`;
+  const likeSpaced = `%"mediaId": ${mediaId}%`;
+
+  const [postRows, pageRows] = await Promise.all([
+    all<Record<string, unknown>>(
+      `SELECT id, title, slug, status, content FROM posts
+        WHERE blog_id = ? AND (content LIKE ? OR content LIKE ?)`,
+      blogId,
+      likeExact,
+      likeSpaced
+    ),
+    all<Record<string, unknown>>(
+      `SELECT id, title, slug, status, content FROM pages
+        WHERE blog_id = ? AND (content LIKE ? OR content LIKE ?)`,
+      blogId,
+      likeExact,
+      likeSpaced
+    ),
+  ]);
+
+  const matches = (content: unknown): boolean => {
+    const ids = mediaIdsInBlocks(parseBlocks(String(content ?? "")).blocks);
+    return ids.includes(mediaId);
+  };
+
+  const refs: MediaReference[] = [];
+  for (const r of postRows) {
+    if (!matches(r.content)) continue;
+    refs.push({
+      entity_type: "post",
+      entity_id: num(r.id),
+      title: String(r.title ?? ""),
+      slug: String(r.slug ?? ""),
+      status: String(r.status ?? ""),
+    });
+  }
+  for (const r of pageRows) {
+    if (!matches(r.content)) continue;
+    refs.push({
+      entity_type: "page",
+      entity_id: num(r.id),
+      title: String(r.title ?? ""),
+      slug: String(r.slug ?? ""),
+      status: String(r.status ?? ""),
+    });
+  }
+
+  const post_count = refs.filter((r) => r.entity_type === "post").length;
+  const page_count = refs.filter((r) => r.entity_type === "page").length;
+  return {
+    blog_id: blogId,
+    media_id: mediaId,
+    post_count,
+    page_count,
+    total: refs.length,
+    references: refs.slice(0, MEDIA_REFERENCE_LIST_LIMIT),
+    truncated: refs.length > MEDIA_REFERENCE_LIST_LIMIT,
+  };
+}
+
+export type DeleteMediaResult =
+  | {
+      ok: true;
+      id: number;
+      file_removed: boolean;
+      references: MediaReferenceSummary;
+    }
+  | {
+      ok: false;
+      reason: "forbidden" | "not_found" | "referenced" | "failed";
+      error: string;
+      references?: MediaReferenceSummary;
+    };
+
+/**
+ * Phase 5b delete with the reference guard.
+ *
+ * Behaviour chosen for this phase (implemented fully, not half of both):
+ * **a referenced image is NOT deleted silently — it is refused, the caller is
+ * told exactly how many posts and pages use it (with their titles), and the
+ * delete only proceeds when the same caller repeats it with `force: true`.**
+ *
+ * `force` never bypasses the tenant checks: membership, `media.manage` and the
+ * "row belongs to this blog" check all still run first.
+ */
+export async function deleteMediaForMemberGuarded(
+  blogId: number,
+  mediaId: number,
+  userId: number,
+  opts: { force?: boolean } = {}
+): Promise<DeleteMediaResult> {
+  const row = await getMediaForMember(mediaId, userId);
+  if (!row || Number(row.blog_id) !== Number(blogId)) {
+    return { ok: false, reason: "not_found", error: "That media item is not in this blog." };
+  }
+  const role = await memberRole(Number(row.blog_id), userId);
+  if (!canDeleteMedia(role)) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      error: `Your role (${role ?? "none"}) cannot delete media from this blog.`,
+    };
+  }
+
+  const references = await mediaReferencesForMember(blogId, mediaId, userId);
+  if (!references) {
+    return { ok: false, reason: "not_found", error: "That media item is not in this blog." };
+  }
+  if (references.total > 0 && opts.force !== true) {
+    const parts: string[] = [];
+    if (references.post_count > 0) {
+      parts.push(`${references.post_count} post${references.post_count === 1 ? "" : "s"}`);
+    }
+    if (references.page_count > 0) {
+      parts.push(`${references.page_count} page${references.page_count === 1 ? "" : "s"}`);
+    }
+    return {
+      ok: false,
+      reason: "referenced",
+      error:
+        `“${row.file_name}” is still used by ${parts.join(" and ")} in this blog. ` +
+        `Deleting it would leave those images broken — confirm the delete to proceed anyway.`,
+      references,
+    };
+  }
+
+  const deleted = await deleteMediaForMember(mediaId, userId);
+  if (!deleted) {
+    return {
+      ok: false,
+      reason: "failed",
+      error: "The media row could not be deleted (it may have just been removed).",
+      references,
+    };
+  }
+  return {
+    ok: true,
+    id: mediaId,
+    file_removed: !resolveMediaFile(row).exists,
+    references,
+  };
+}
+

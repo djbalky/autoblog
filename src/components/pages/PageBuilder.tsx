@@ -26,6 +26,7 @@ import {
   type PageBlockType,
 } from "../blocks/types";
 import { RenderBlocks } from "../blocks/renderBlocks";
+import { ImageBlockEditor } from "../blocks/ImageBlockEditor";
 import {
   createNewPageAction,
   savePageAction,
@@ -52,7 +53,7 @@ const BLOCK_BUTTONS: { type: PageBlockType; hint: string }[] = [
   { type: "two-column", hint: "Two text columns side by side" },
   { type: "list", hint: "Bulleted or numbered list" },
   { type: "quote", hint: "Pull-quote with optional attribution" },
-  { type: "image", hint: "Image by URL + alt text (media library lands in Phase 5)" },
+  { type: "image", hint: "Image by URL or from this blog's media library, plus alt text" },
   { type: "cta", hint: "Call-to-action banner with a real http(s) button link" },
   { type: "spacer", hint: "Vertical space between sections" },
 ];
@@ -313,6 +314,14 @@ export function PageBuilder({ blog, role, page, revisions }: PageBuilderProps) {
     });
   }
 
+  /**
+   * Non-blocking accessibility count: images that will render but carry no alt
+   * text. Never prevents saving or publishing.
+   */
+  const imagesMissingAlt = blocks.filter(
+    (b) => b.type === "image" && b.data.url.trim() !== "" && b.data.alt.trim() === ""
+  ).length;
+
   return (
     <main className="min-h-dvh bg-neutral-50">
       <header className="sticky top-0 z-20 border-b border-neutral-200 bg-white/95 backdrop-blur">
@@ -493,6 +502,7 @@ export function PageBuilder({ blog, role, page, revisions }: PageBuilderProps) {
                   index={index}
                   total={blocks.length}
                   active={activeIndex === index}
+                  blogId={blog.id}
                   onActivate={() => setActiveIndex(index)}
                   onChange={(updater) => updateBlock(index, updater)}
                   onMove={(dir) => moveBlock(index, dir)}
@@ -648,6 +658,13 @@ export function PageBuilder({ blog, role, page, revisions }: PageBuilderProps) {
                   <Row label="Blocks" value={String(blocks.length)} />
                   <Row label="Your role" value={role} />
                 </dl>
+                {imagesMissingAlt > 0 && (
+                  <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800">
+                    <b>Accessibility:</b> {imagesMissingAlt} image
+                    {imagesMissingAlt === 1 ? "" : "s"} on this page have no alt text. Publishing
+                    still works — add alt text so screen readers describe the pictures.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="max-h-[65vh] space-y-2 overflow-y-auto p-3">
@@ -721,6 +738,8 @@ interface BlockCardProps {
   index: number;
   total: number;
   active: boolean;
+  /** Blog being edited — scopes the media picker's lookups server-side. */
+  blogId: number;
   onActivate: () => void;
   onChange: (updater: (b: Block) => Block) => void;
   onMove: (dir: -1 | 1) => void;
@@ -733,6 +752,7 @@ function BlockCard({
   index,
   total,
   active,
+  blogId,
   onActivate,
   onChange,
   onMove,
@@ -1052,40 +1072,14 @@ function BlockCard({
       )}
 
       {block.type === "image" && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <input
-              value={block.data.url}
-              onChange={(e) =>
-                onChange((b) => (b.type === "image" ? { ...b, data: { ...b.data, url: e.target.value } } : b))
-              }
-              placeholder="https://example.com/image.jpg"
-              className={inputCls + " font-mono text-xs"}
-            />
-          </div>
-          <input
-            value={block.data.alt}
-            onChange={(e) =>
-              onChange((b) => (b.type === "image" ? { ...b, data: { ...b.data, alt: e.target.value } } : b))
-            }
-            placeholder="Alt text (required for accessibility)"
-            className={inputCls + " text-xs"}
-          />
-          <input
-            value={block.data.caption ?? ""}
-            onChange={(e) =>
-              onChange((b) => (b.type === "image" ? { ...b, data: { ...b.data, caption: e.target.value } } : b))
-            }
-            placeholder="Caption (optional)"
-            className={inputCls + " text-xs"}
-          />
-          {block.data.url.trim() === "" && (
-            <p className="sm:col-span-2 text-[11px] text-amber-700">
-              No image URL yet — the preview and public page show this block as missing rather than
-              inventing an image.
-            </p>
-          )}
-        </div>
+        <ImageBlockEditor
+          blogId={blogId}
+          data={block.data}
+          onChange={(next) =>
+            onChange((b) => (b.type === "image" ? { ...b, data: next } : b))
+          }
+          inputClassName={inputCls + " text-xs"}
+        />
       )}
     </article>
   );

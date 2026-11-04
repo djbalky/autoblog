@@ -17,11 +17,13 @@ import {
   canDeleteMedia,
   canUploadMedia,
   createMediaForMember,
-  deleteMediaForMember,
+  deleteMediaForMemberGuarded,
   listMediaForMember,
   mediaPublicPath,
+  mediaReferencesForMember,
   mediaUsage,
   type MediaListItem,
+  type MediaReferenceSummary,
   type MediaUsage,
 } from "../dal/media";
 
@@ -165,33 +167,155 @@ export const mediaUploadAction = createServerFn({ method: "POST" })
 interface DeleteInput {
   blogId: number;
   mediaId: number;
+  /**
+   * Phase 5b: a delete of an image that posts/pages still embed is refused the
+   * first time (with the real reference count). The UI shows that count and,
+   * only after the user confirms, repeats the call with `force: true`.
+   */
+  force?: boolean;
 }
 const asDelete = (d: unknown) => d as DeleteInput;
 
 export const mediaDeleteAction = createServerFn({ method: "POST" })
   .validator(asDelete)
-  .handler(async ({ data }): Promise<ActionResult<{ id: number }>> => {
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      ActionResult<{
+        id: number;
+        fileRemoved: boolean;
+        references: MediaReferenceSummary;
+      }> & { blocked?: boolean; references?: MediaReferenceSummary }
+    > => {
+      await ensureInitialized();
+      const user = await requireUser();
+      const blogId = Number(data.blogId);
+      const mediaId = Number(data.mediaId);
+      if (!Number.isFinite(blogId) || !Number.isFinite(mediaId)) {
+        return { ok: false, error: "Unknown media item." };
+      }
+      const membership = await getBlogMembership(blogId, user.id);
+      if (!membership) return { ok: false, forbidden: true, error: NOT_MEMBER };
+      if (!canDeleteMedia(membership.role)) {
+        return {
+          ok: false,
+          forbidden: true,
+          error: `Your role (${membership.role}) cannot delete media from this blog.`,
+        };
+      }
+      // Every check below is re-run server-side and scoped to this blog: a media
+      // id from another blog resolves to not-found instead of being deleted, and
+      // `force` can never skip membership/role/tenant checks.
+      const result = await deleteMediaForMemberGuarded(blogId, mediaId, user.id, {
+        force: data.force === true,
+      });
+      if (result.ok) {
+        return {
+          ok: true,
+          data: {
+            id: result.id,
+            fileRemoved: result.file_removed,
+            references: result.references,
+          },
+        };
+      }
+      if (result.reason === "referenced") {
+        return {
+          ok: false,
+          blocked: true,
+          references: result.references,
+          error: result.error,
+        };
+      }
+      if (result.reason === "not_found") {
+        return { ok: false, notFound: true, error: result.error };
+      }
+      if (result.reason === "forbidden") {
+        return { ok: false, forbidden: true, error: result.error };
+      }
+      return { ok: false, error: result.error };
+    }
+  );
+
+// ===========================================================================
+// Phase 5b — media picker + reference audit
+// ===========================================================================
+
+/**
+ * What the editor's media picker needs, and nothing more: the blog's real media
+ * rows (member-scoped), whether this role may upload, and the real limits.
+ * A non-member gets `forbidden: true` and an empty list — never another blog's
+ * media, and never a made-up placeholder tile.
+ */
+export interface MediaPickerData {
+  forbidden: boolean;
+  media: MediaListItem[];
+  canUpload: boolean;
+  limits: { maxBytes: number; mimeTypes: string[]; label: string };
+}
+
+export const mediaPickerListAction = createServerFn({ method: "POST" })
+  .validator(asBlogId)
+  .handler(async ({ data }): Promise<MediaPickerData> => {
     await ensureInitialized();
     const user = await requireUser();
     const blogId = Number(data.blogId);
-    const mediaId = Number(data.mediaId);
-    if (!Number.isFinite(blogId) || !Number.isFinite(mediaId)) {
-      return { ok: false, error: "Unknown media item." };
-    }
+    const empty: MediaPickerData = {
+      forbidden: true,
+      media: [],
+      canUpload: false,
+      limits: {
+        maxBytes: MEDIA_LIMITS.maxBytes,
+        mimeTypes: MEDIA_LIMITS.mimeTypes,
+        label: MEDIA_LIMITS.label,
+      },
+    };
+    if (!Number.isFinite(blogId)) return empty;
     const membership = await getBlogMembership(blogId, user.id);
-    if (!membership) return { ok: false, forbidden: true, error: NOT_MEMBER };
-    if (!canDeleteMedia(membership.role)) {
-      return {
-        ok: false,
-        forbidden: true,
-        error: `Your role (${membership.role}) cannot delete media from this blog.`,
-      };
-    }
-    // Scoped by membership inside the DAL — a media id from another blog
-    // resolves to nothing and reports not-found instead of deleting it.
-    const deleted = await deleteMediaForMember(mediaId, user.id);
-    if (!deleted) {
-      return { ok: false, notFound: true, error: "That media item no longer exists in this blog." };
-    }
-    return { ok: true, data: { id: mediaId } };
+    if (!membership) return empty;
+    const media = await listMediaForMember(blogId, user.id);
+    return {
+      forbidden: false,
+      media,
+      canUpload: canUploadMedia(membership.role),
+      limits: empty.limits,
+    };
   });
+
+interface ReferencesInput {
+  blogId: number;
+  mediaId: number;
+}
+const asReferences = (d: unknown) => d as ReferencesInput;
+
+/**
+ * Real per-blog reference count for one media row. `null` data means "not a
+ * member of this blog, or that media does not belong to it" — the UI shows that
+ * honestly instead of rendering a zero that would imply "safe to delete".
+ */
+export const mediaReferencesAction = createServerFn({ method: "POST" })
+  .validator(asReferences)
+  .handler(
+    async ({
+      data,
+    }): Promise<ActionResult<{ references: MediaReferenceSummary }>> => {
+      await ensureInitialized();
+      const user = await requireUser();
+      const blogId = Number(data.blogId);
+      const mediaId = Number(data.mediaId);
+      if (!Number.isFinite(blogId) || !Number.isFinite(mediaId)) {
+        return { ok: false, error: "Unknown media item." };
+      }
+      const membership = await getBlogMembership(blogId, user.id);
+      if (!membership) return { ok: false, forbidden: true, error: NOT_MEMBER };
+      const references = await mediaReferencesForMember(blogId, mediaId, user.id);
+      if (!references) {
+        return {
+          ok: false,
+          notFound: true,
+          error: "That media item is not in this blog.",
+        };
+      }
+      return { ok: true, data: { references } };
+    });

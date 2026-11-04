@@ -186,8 +186,8 @@ function BlockView({
           <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
             <p className="font-medium">Image block — no image URL set</p>
             <p className="mt-1 text-xs">
-              Add an image URL in the editor. The media library arrives in Phase 5;
-              until then this block stores the URL you paste.
+              Pick an image from this blog&apos;s media library, or paste an external URL, in the
+              editor. Until then nothing is rendered.
             </p>
           </div>
         );
