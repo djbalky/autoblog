@@ -6,6 +6,7 @@ import { currentUser, requireUser } from "../auth-context";
 import { ensureInitialized } from "../init";
 import { uploadToStaging } from "../dal/media";
 import type { UploadRef } from "../dal/media";
+import { isReservedSlug } from "../../lib/reservedSlugs";
 import {
   createBlogAndBackbone,
   validatePayload,
@@ -76,11 +77,17 @@ const asSlug = (d: unknown) => d as SlugInput;
 export const checkSlugAction = createServerFn({ method: "POST" })
   .validator(asSlug)
   .handler(
-    async ({ data }): Promise<{ available: boolean; slug: string }> => {
+    async ({
+      data,
+    }): Promise<{ available: boolean; slug: string; reserved: boolean }> => {
       await ensureInitialized();
       await currentUser(); // non-blocking: slug check is not sensitive
       const slug = (data.slug ?? "").trim().toLowerCase();
-      return { available: !(await slugExists(slug)), slug };
+      // Phase 5c: a blog lives at `/<slug>`, so names the app already answers
+      // (login, dashboard, media, api, …) can never be used. Reported as its own
+      // state so the wizard can say why, instead of claiming it is "taken".
+      const reserved = isReservedSlug(slug);
+      return { available: !reserved && !(await slugExists(slug)), slug, reserved };
     }
   );
 

@@ -2,6 +2,7 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import type { ReactNode } from "react";
 
 import appCss from "~/styles/app.css?url";
+import { NotFoundPage } from "~/components/public/NotFoundPage";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -12,7 +13,9 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
-  notFoundComponent: () => <div>Page not found</div>,
+  // Phase 5c: every unmatched path renders the styled 404 page (the catch-all
+  // route `/$` sets a real 404 status before throwing notFound()).
+  notFoundComponent: () => <NotFoundPage />,
   component: RootComponent,
 });
 
