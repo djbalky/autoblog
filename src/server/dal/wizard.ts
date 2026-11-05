@@ -12,6 +12,7 @@
  */
 import { nowIso, run, get, all } from "../store";
 import { slugify, type BlogRow } from "./blogs";
+import { isReservedSlug, reservedSlugMessage } from "../../lib/reservedSlugs";
 import { logActivity } from "./activity";
 import {
   registerStagedMediaForBlog,
@@ -158,6 +159,12 @@ export function validatePayload(p: WizardPayload): string | null {
   }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.basic.slug)) {
     return "Slug may only contain lowercase letters, numbers and single hyphens.";
+  }
+  // Phase 5c: the slug becomes the first path segment of the public site
+  // (`/<slug>`), which the app's own routes occupy. Reserved names are refused
+  // here, before any row is written, so no blog can ever shadow /login etc.
+  if (isReservedSlug(p.basic.slug)) {
+    return reservedSlugMessage(p.basic.slug.trim());
   }
   if (!p.basic.language) return "Language is required.";
   if (!p.basic.brand_name || !p.basic.brand_name.trim()) {

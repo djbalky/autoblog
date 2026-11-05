@@ -3,6 +3,7 @@
  */
 
 import { all, get, run, nowIso } from "../store";
+import { isReservedSlug } from "../../lib/reservedSlugs";
 
 export interface BlogRow {
   id: number;
@@ -43,7 +44,12 @@ export function slugify(input: string): string {
 }
 
 export async function uniqueSlug(base: string): Promise<string> {
-  const slug = slugify(base) || "blog";
+  let slug = slugify(base) || "blog";
+  // Phase 5c: a blog lives at `/<slug>`, which shares its first path segment
+  // with the app's own routes. A reserved name (login, dashboard, media, …) can
+  // never be used, so this non-interactive path picks a real alternative instead
+  // of writing a blog that would be unreachable.
+  if (isReservedSlug(slug)) slug = `${slug}-blog`;
   // If the slug is taken, append a short random suffix.
   const exists = await get<{ id: number }>(
     "SELECT id FROM blogs WHERE slug = ?",

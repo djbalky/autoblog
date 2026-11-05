@@ -592,9 +592,10 @@ export function BlogWizard() {
   const [form, setForm] = useState<WizardForm>(() => defaultForm(networks));
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [slugChecked, setSlugChecked] = useState<null | { available: boolean }>(
-    null,
-  );
+  const [slugChecked, setSlugChecked] = useState<null | {
+    available: boolean;
+    reserved?: boolean;
+  }>(null);
   const [slugChecking, setSlugChecking] = useState(false);
   const [uploading, setUploading] = useState<"logo" | "favicon" | null>(null);
   const [creating, setCreating] = useState(false);
@@ -707,9 +708,11 @@ export function BlogWizard() {
     setSlugChecked(null);
     try {
       const res = await checkSlugAction({ data: { slug } });
-      setSlugChecked({ available: res.available });
+      setSlugChecked({ available: res.available, reserved: res.reserved });
     } catch {
-      setSlugChecked({ available: true });
+      // The check itself failed — stay honest and show no verdict at all; the
+      // server still validates the slug when the blog is created.
+      setSlugChecked(null);
     } finally {
       setSlugChecking(false);
     }
@@ -759,7 +762,10 @@ export function BlogWizard() {
       if (!form.basic.slug.trim()) e.slug = "URL slug is required.";
       else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(form.basic.slug))
         e.slug = "Use lowercase letters, numbers and hyphens only.";
-      if (slugChecked && !slugChecked.available)
+      if (slugChecked && slugChecked.reserved)
+        e.slug =
+          "That URL is reserved by the app (it is one of the platform's own paths). Choose another slug.";
+      else if (slugChecked && !slugChecked.available)
         e.slug = "That slug is already taken.";
       if (!form.basic.language) e.language = "Choose a language.";
     } else if (s === 1) {
@@ -1064,9 +1070,14 @@ export function BlogWizard() {
                   {slugChecking ? "…" : "Check"}
                 </button>
               </div>
-              {slugChecked && !slugChecked.available && (
+              {slugChecked && slugChecked.reserved && (
                 <span className="mt-1 block text-xs text-red-600">
-                  Slug is taken — a suffix will be appended.
+                  Reserved by the app — pick a different URL for this blog.
+                </span>
+              )}
+              {slugChecked && !slugChecked.reserved && !slugChecked.available && (
+                <span className="mt-1 block text-xs text-red-600">
+                  Slug is already taken by another blog.
                 </span>
               )}
               {slugChecked && slugChecked.available && (
