@@ -12,6 +12,7 @@
  */
 import type { ReactNode } from "react";
 import type { Block } from "./types";
+import { SafeImage } from "./SafeImage";
 
 const SAFE_HREF = /^(https?:\/\/|\/|#|mailto:)/i;
 
@@ -194,10 +195,9 @@ function BlockView({
       }
       return (
         <figure className="space-y-2">
-          <img
+          <SafeImage
             src={url}
             alt={block.data.alt || ""}
-            loading="lazy"
             className="w-full rounded-lg border border-neutral-200 object-cover"
           />
           {(block.data.caption || block.data.alt) && (

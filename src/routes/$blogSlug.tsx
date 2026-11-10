@@ -1,5 +1,5 @@
 /**
- * Autonoblog — PUBLIC BLOG HOME at `/<blog-slug>` (Phase 5c).
+ * Autonoblog — PUBLIC BLOG HOME at `/<blog-slug>` (Phase 5c, SEO in 5d).
  *
  * Server-rendered from the database: the blog's name/tagline/description plus
  * its published posts, newest first, one page at a time (PUBLIC_PAGE_SIZE = 6)
@@ -11,6 +11,12 @@
  *  - only posts with `status = 'published'` and a real, non-future
  *    `published_at` are listed.
  *
+ * SEO (Phase 5d): `head()` emits title, description, a self-referencing
+ * canonical, Open Graph (`og:type=website`) and a Twitter card, plus JSON-LD
+ * `Blog` — all from the real blog row, its real posts and the ORIGIN of the
+ * current request. `og:image` is only emitted when the newest published post
+ * really has an image.
+ *
  * A blog slug that is reserved by the app (`/login`, `/dashboard`, …) or a slug
  * with no active blog behind it answers a real HTTP 404 through the styled
  * NotFoundPage — never an empty blog shell.
@@ -19,7 +25,9 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { publicBlogHomeAction } from "~/server/rpc/public";
 import type { PublicBlogHome } from "~/server/dal/publicSite";
 import { setHttpStatus } from "~/server/httpStatus";
+import { currentOrigin } from "~/server/origin";
 import { isReservedSlug } from "~/lib/reservedSlugs";
+import { absoluteImage, absoluteUrl, isoDate, metaDescription } from "~/lib/seoMeta";
 import { PublicShell, PostCard } from "~/components/public/PublicShell";
 import { NotFoundPage } from "~/components/public/NotFoundPage";
 
@@ -27,6 +35,9 @@ interface BlogHomeSearch {
   /** Absent on the canonical `/<slug>` URL; only present for older/newer pages. */
   page?: number;
 }
+
+/** The blog home payload plus the origin of this request (for absolute URLs). */
+type HomeLoaderData = PublicBlogHome & { origin: string };
 
 export const Route = createFileRoute("/$blogSlug")({
   // `page` stays optional so the canonical blog URL is exactly `/<blog-slug>`
@@ -38,7 +49,7 @@ export const Route = createFileRoute("/$blogSlug")({
     return { page: Math.floor(n) };
   },
   loaderDeps: ({ search }): BlogHomeSearch => ({ page: search.page }),
-  loader: async ({ params, deps }): Promise<PublicBlogHome> => {
+  loader: async ({ params, deps }): Promise<HomeLoaderData> => {
     if (isReservedSlug(params.blogSlug)) {
       await setHttpStatus(404);
       throw notFound();
@@ -50,7 +61,7 @@ export const Route = createFileRoute("/$blogSlug")({
       await setHttpStatus(404);
       throw notFound();
     }
-    return res.home;
+    return { ...res.home, origin: await currentOrigin() };
   },
   head: ({ loaderData }) => {
     if (!loaderData) {
@@ -61,13 +72,61 @@ export const Route = createFileRoute("/$blogSlug")({
         ],
       };
     }
-    const blog = loaderData.blog;
-    const description =
-      blog.description.trim() || blog.tagline.trim() || `${blog.name} on Autonoblog.`;
+    const home = loaderData;
+    const blog = home.blog;
+    const description = metaDescription(
+      blog.description.trim() || blog.tagline.trim() || `${blog.name} on Autonoblog.`
+    );
+    const path = home.page > 1 ? `/${blog.slug}?page=${String(home.page)}` : `/${blog.slug}`;
+    const url = absoluteUrl(home.origin, path);
+    const feed = absoluteUrl(home.origin, `/${blog.slug}/feed.xml`);
+    const lead = home.posts.find((p) => p.image)?.image ?? null;
+    const image = lead ? absoluteImage(home.origin, lead.url) : null;
+
+    const jsonLd: Record<string, unknown> = {
+      "@context": "https://schema.org",
+      "@type": "Blog",
+      name: blog.name,
+      ...(description ? { description } : {}),
+      ...(url ? { url } : {}),
+      ...(feed ? { "@id": feed } : {}),
+      publisher: { "@type": "Organization", name: blog.name },
+      // The newest published posts on this page — real rows only.
+      ...(home.posts.length
+        ? {
+            blogPost: home.posts.map((post) => ({
+              "@type": "BlogPosting",
+              headline: post.title,
+              ...(absoluteUrl(home.origin, `/${blog.slug}/${post.slug}`)
+                ? { url: absoluteUrl(home.origin, `/${blog.slug}/${post.slug}`) }
+                : {}),
+              ...(isoDate(post.publishedAt) ? { datePublished: isoDate(post.publishedAt) } : {}),
+            })),
+          }
+        : {}),
+    };
+
     return {
       meta: [
         { title: blog.tagline.trim() ? `${blog.name} — ${blog.tagline.trim()}` : blog.name },
         { name: "description", content: description },
+        { property: "og:type", content: "website" },
+        { property: "og:title", content: blog.name },
+        { property: "og:description", content: description },
+        { property: "og:site_name", content: blog.name },
+        ...(url ? [{ property: "og:url", content: url }] : []),
+        ...(image ? [{ property: "og:image", content: image }] : []),
+        { name: "twitter:card", content: image ? "summary_large_image" : "summary" },
+        { name: "twitter:title", content: blog.name },
+        { name: "twitter:description", content: description },
+        ...(image ? [{ name: "twitter:image", content: image }] : []),
+        { "script:ld+json": jsonLd },
+      ],
+      links: [
+        ...(url ? [{ rel: "canonical", href: url }] : []),
+        ...(feed
+          ? [{ rel: "alternate", type: "application/rss+xml", title: `${blog.name} feed`, href: feed }]
+          : []),
       ],
     };
   },

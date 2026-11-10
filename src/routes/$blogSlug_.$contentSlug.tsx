@@ -1,5 +1,5 @@
 /**
- * Autonoblog — PUBLIC ARTICLE / PAGE at `/<blog-slug>/<slug>` (Phase 5c).
+ * Autonoblog — PUBLIC ARTICLE / PAGE at `/<blog-slug>/<slug>` (Phase 5c, SEO in 5d).
  *
  * One route serves both content types, rendered with the SAME block renderer
  * the editor preview uses (`RenderBlocks` in "public" mode), so what an author
@@ -10,18 +10,30 @@
  * has that slug. Draft, pending, scheduled and trashed rows of either type are
  * excluded in SQL, so they answer the same real 404 as a slug that never
  * existed.
+ *
+ * SEO (Phase 5d): `head()` emits title, description, canonical, Open Graph
+ * (`og:type=article` plus published time/author), a Twitter card and JSON-LD —
+ * all from the real row and from the ORIGIN of the current request (the loader
+ * reads it, so it is the visitor's host, never a hardcoded domain). The JSON-LD
+ * goes in through the router's `script:ld+json` meta, which JSON-escapes it, so
+ * a title can never break out of the `<script>`.
  */
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { publicContentAction } from "~/server/rpc/public";
 import type { PublicContent } from "~/server/dal/publicSite";
 import { setHttpStatus } from "~/server/httpStatus";
+import { currentOrigin } from "~/server/origin";
 import { isReservedSlug } from "~/lib/reservedSlugs";
+import { absoluteImage, absoluteUrl, isoDate, metaDescription } from "~/lib/seoMeta";
 import { RenderBlocks } from "~/components/blocks/renderBlocks";
 import { PublicShell, formatDate } from "~/components/public/PublicShell";
 import { NotFoundPage } from "~/components/public/NotFoundPage";
 
+/** The content plus the origin of this request (for absolute URLs). */
+type ContentLoaderData = PublicContent & { origin: string };
+
 export const Route = createFileRoute("/$blogSlug_/$contentSlug")({
-  loader: async ({ params }): Promise<PublicContent> => {
+  loader: async ({ params }): Promise<ContentLoaderData> => {
     if (isReservedSlug(params.blogSlug)) {
       await setHttpStatus(404);
       throw notFound();
@@ -33,7 +45,7 @@ export const Route = createFileRoute("/$blogSlug_/$contentSlug")({
       await setHttpStatus(404);
       throw notFound();
     }
-    return res.content;
+    return { ...res.content, origin: await currentOrigin() };
   },
   head: ({ loaderData }) => {
     if (!loaderData) {
@@ -44,11 +56,66 @@ export const Route = createFileRoute("/$blogSlug_/$contentSlug")({
         ],
       };
     }
-    const description = loaderData.excerpt.trim().slice(0, 160);
+    const content = loaderData;
+    const blog = content.blog;
+    const description = metaDescription(content.excerpt);
+    const url = absoluteUrl(content.origin, `/${blog.slug}/${content.slug}`);
+    const feed = absoluteUrl(content.origin, `/${blog.slug}/feed.xml`);
+    const image = content.image ? absoluteImage(content.origin, content.image.url) : null;
+    const published = isoDate(content.publishedAt);
+    const modified = isoDate(content.updatedAt) || published;
+    const isArticle = content.kind === "post";
+
+    const jsonLd: Record<string, unknown> = isArticle
+      ? {
+          "@context": "https://schema.org",
+          "@type": "BlogPosting",
+          headline: content.title,
+          ...(description ? { description } : {}),
+          ...(published ? { datePublished: published } : {}),
+          ...(modified ? { dateModified: modified } : {}),
+          author: { "@type": "Person", name: content.authorName },
+          ...(image ? { image: [image] } : {}),
+          ...(url ? { mainEntityOfPage: { "@type": "WebPage", "@id": url } } : {}),
+          publisher: { "@type": "Organization", name: blog.name },
+          ...(url ? { url } : {}),
+        }
+      : {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: content.title,
+          ...(description ? { description } : {}),
+          ...(published ? { datePublished: published } : {}),
+          ...(modified ? { dateModified: modified } : {}),
+          isPartOf: { "@type": "Blog", name: blog.name },
+          ...(url ? { url } : {}),
+        };
+
     return {
       meta: [
-        { title: `${loaderData.title} — ${loaderData.blog.name}` },
+        { title: `${content.title} — ${blog.name}` },
         ...(description ? [{ name: "description", content: description }] : []),
+        { property: "og:type", content: isArticle ? "article" : "website" },
+        { property: "og:title", content: content.title },
+        ...(description ? [{ property: "og:description", content: description }] : []),
+        { property: "og:site_name", content: blog.name },
+        ...(url ? [{ property: "og:url", content: url }] : []),
+        ...(image ? [{ property: "og:image", content: image }] : []),
+        ...(image && content.image?.alt ? [{ property: "og:image:alt", content: content.image.alt }] : []),
+        ...(isArticle && published ? [{ property: "article:published_time", content: published }] : []),
+        ...(isArticle && modified ? [{ property: "article:modified_time", content: modified }] : []),
+        ...(isArticle ? [{ property: "article:author", content: content.authorName }] : []),
+        { name: "twitter:card", content: image ? "summary_large_image" : "summary" },
+        { name: "twitter:title", content: content.title },
+        ...(description ? [{ name: "twitter:description", content: description }] : []),
+        ...(image ? [{ name: "twitter:image", content: image }] : []),
+        { "script:ld+json": jsonLd },
+      ],
+      links: [
+        ...(url ? [{ rel: "canonical", href: url }] : []),
+        ...(feed
+          ? [{ rel: "alternate", type: "application/rss+xml", title: `${blog.name} feed`, href: feed }]
+          : []),
       ],
     };
   },

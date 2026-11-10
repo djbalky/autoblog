@@ -70,8 +70,15 @@ export interface PublicContent {
   blocks: Block[];
   excerpt: string;
   publishedAt: string;
+  /** Real "last changed" timestamp (posts/pages.updated_at) — sitemap + JSON-LD. */
+  updatedAt: string;
   /** Author display name, or the blog owner's when the row has no author. */
   authorName: string;
+  /**
+   * The content's own lead image (featured media, else the first image block),
+   * used for `og:image` and JSON-LD. Null when the content really has none.
+   */
+  image: PublicImage | null;
 }
 
 function num(v: unknown): number {
@@ -226,10 +233,12 @@ export async function getPublicContent(
   if (!slug) return null;
 
   const post = await get<Record<string, unknown>>(
-    `SELECT p.id, p.title, p.slug, p.content, p.excerpt, p.published_at,
-            a.display_name AS author_name
+    `SELECT p.id, p.title, p.slug, p.content, p.excerpt, p.published_at, p.updated_at,
+            a.display_name AS author_name,
+            m.id AS media_id, m.alt_text AS media_alt, m.file_name AS media_name
        FROM posts p
        LEFT JOIN authors a ON a.id = p.author_id AND a.blog_id = p.blog_id
+       LEFT JOIN media m ON m.id = p.featured_media_id AND m.blog_id = p.blog_id
       WHERE p.blog_id = ? AND p.slug = ? AND p.status = 'published'
         AND p.published_at IS NOT NULL AND p.published_at <= ?`,
     blog.id,
@@ -238,6 +247,10 @@ export async function getPublicContent(
   );
   if (post) {
     const parsed = parseBlocks(str(post.content));
+    const featured =
+      post.media_id != null
+        ? safeImage(mediaPublicPath(num(post.media_id)), str(post.media_alt) || str(post.media_name))
+        : null;
     return {
       kind: "post",
       blog,
@@ -247,12 +260,14 @@ export async function getPublicContent(
       blocks: parsed.blocks,
       excerpt: str(post.excerpt).trim() || suggestExcerpt(parsed.blocks),
       publishedAt: str(post.published_at),
+      updatedAt: str(post.updated_at) || str(post.published_at),
       authorName: str(post.author_name).trim() || blog.ownerName || blog.name,
+      image: featured ?? firstImageInBlocks(parsed.blocks),
     };
   }
 
   const page = await get<Record<string, unknown>>(
-    `SELECT id, title, slug, content, published_at
+    `SELECT id, title, slug, content, published_at, updated_at
        FROM pages
       WHERE blog_id = ? AND slug = ? AND status = 'published'
         AND published_at IS NOT NULL AND published_at <= ?`,
@@ -271,6 +286,138 @@ export async function getPublicContent(
     blocks: parsed.blocks,
     excerpt: (parsed.meta.excerpt ?? "").trim() || suggestExcerpt(parsed.blocks),
     publishedAt: str(page.published_at),
+    updatedAt: str(page.updated_at) || str(page.published_at),
     authorName: blog.ownerName || blog.name,
+    image: firstImageInBlocks(parsed.blocks),
   };
+}
+
+// ---- Sitemap / feed / robots data (Phase 5d) --------------------------------
+
+/** One absolute-URL-ready entry: the path under the blog plus its real lastmod. */
+export interface SitemapEntry {
+  path: string;
+  lastmod: string;
+}
+
+export interface PublicSitemap {
+  blog: PublicBlog;
+  /** Blog home first, then published posts (newest first), then published pages. */
+  entries: SitemapEntry[];
+}
+
+/**
+ * Everything `/<blog-slug>/sitemap.xml` may list — and nothing else.
+ *
+ * The SAME visibility rule as the public pages is applied in SQL (active blog,
+ * `status = 'published'`, a real non-future `published_at`), so drafts,
+ * scheduled, trashed and future-dated rows cannot reach a search engine through
+ * the sitemap even though they never render. `lastmod` is the row's real
+ * `updated_at`.
+ */
+export async function getPublicSitemap(slug: string, now: string): Promise<PublicSitemap | null> {
+  const blog = await getPublicBlog(slug);
+  if (!blog) return null;
+
+  const blogRow = await get<{ updated_at: unknown }>(
+    "SELECT updated_at FROM blogs WHERE id = ?",
+    blog.id
+  );
+
+  const posts = await all<Record<string, unknown>>(
+    `SELECT slug, updated_at, published_at FROM posts
+      WHERE blog_id = ? AND status = 'published'
+        AND published_at IS NOT NULL AND published_at <= ?
+      ORDER BY published_at DESC, id DESC`,
+    blog.id,
+    now
+  );
+  const pages = await all<Record<string, unknown>>(
+    `SELECT slug, updated_at, published_at FROM pages
+      WHERE blog_id = ? AND status = 'published'
+        AND published_at IS NOT NULL AND published_at <= ?
+      ORDER BY published_at DESC, id DESC`,
+    blog.id,
+    now
+  );
+
+  const postEntries: SitemapEntry[] = posts.map((r) => ({
+    path: `/${blog.slug}/${str(r.slug)}`,
+    lastmod: str(r.updated_at) || str(r.published_at),
+  }));
+  const pageEntries: SitemapEntry[] = pages.map((r) => ({
+    path: `/${blog.slug}/${str(r.slug)}`,
+    lastmod: str(r.updated_at) || str(r.published_at),
+  }));
+
+  // The blog home changes whenever the blog or any of its published content
+  // changes, so its lastmod is the newest of those real timestamps.
+  const homeLastmod = [str(blogRow?.updated_at), ...postEntries.map((e) => e.lastmod), ...pageEntries.map((e) => e.lastmod)]
+    .filter(Boolean)
+    .sort()
+    .pop();
+
+  return {
+    blog,
+    entries: [{ path: `/${blog.slug}`, lastmod: homeLastmod ?? "" }, ...postEntries, ...pageEntries],
+  };
+}
+
+export interface PublicFeedItem {
+  title: string;
+  path: string;
+  publishedAt: string;
+  updatedAt: string;
+  excerpt: string;
+  authorName: string;
+}
+
+export interface PublicFeed {
+  blog: PublicBlog;
+  items: PublicFeedItem[];
+}
+
+/**
+ * The latest N published posts for `/<blog-slug>/feed.xml` — same SQL
+ * visibility rule as the public pages. A blog with no published posts returns a
+ * valid feed with zero items (the caller renders the empty channel).
+ */
+export async function getPublicFeed(slug: string, now: string, limit = 20): Promise<PublicFeed | null> {
+  const blog = await getPublicBlog(slug);
+  if (!blog) return null;
+  const rows = await all<Record<string, unknown>>(
+    `SELECT p.title, p.slug, p.excerpt, p.content, p.published_at, p.updated_at,
+            a.display_name AS author_name
+       FROM posts p
+       LEFT JOIN authors a ON a.id = p.author_id AND a.blog_id = p.blog_id
+      WHERE p.blog_id = ? AND p.status = 'published'
+        AND p.published_at IS NOT NULL AND p.published_at <= ?
+      ORDER BY p.published_at DESC, p.id DESC
+      LIMIT ?`,
+    blog.id,
+    now,
+    limit
+  );
+  return {
+    blog,
+    items: rows.map((r) => {
+      const parsed = parseBlocks(str(r.content));
+      return {
+        title: str(r.title),
+        path: `/${blog.slug}/${str(r.slug)}`,
+        publishedAt: str(r.published_at),
+        updatedAt: str(r.updated_at) || str(r.published_at),
+        excerpt: str(r.excerpt).trim() || suggestExcerpt(parsed.blocks),
+        authorName: str(r.author_name).trim() || blog.ownerName || blog.name,
+      };
+    }),
+  };
+}
+
+/** Slugs of every publicly visible (active) blog — for the root sitemap index. */
+export async function listActiveBlogSlugs(): Promise<string[]> {
+  const rows = await all<{ slug: unknown }>(
+    "SELECT slug FROM blogs WHERE status = 'active' ORDER BY slug ASC"
+  );
+  return rows.map((r) => str(r.slug)).filter(Boolean);
 }
