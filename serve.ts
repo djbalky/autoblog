@@ -10,6 +10,7 @@
 // the takeover works across user boundaries.
 import handler from "./dist/server/server.js";
 import { mediaIdFromPath, serveMedia } from "./src/server/mediaServe";
+import { seoResponse } from "./src/server/seoRoutes";
 
 // Pinned, NOT read from the environment. The published preview URL
 // (<label>.<PUBLIC_SITE_DOMAIN>) is reverse-proxied to 0.0.0.0:3000 inside the
@@ -59,6 +60,12 @@ for (let attempt = 1; ; attempt++) {
           const file = Bun.file(CLIENT_DIR + pathname);
           if (await file.exists()) return new Response(file);
         }
+        // Machine-readable SEO endpoints (Phase 5d): /robots.txt, /sitemap.xml,
+        // /<blog-slug>/sitemap.xml, /<blog-slug>/feed.xml. They return raw XML or
+        // text with their own content type, so they are answered before SSR — the
+        // same reason /media/<id> is. See src/server/seoRoutes.ts.
+        const seoRes = await seoResponse(req);
+        if (seoRes) return seoRes;
         return (handler as { fetch: (r: Request) => Response | Promise<Response> }).fetch(req);
       },
     });

@@ -8,6 +8,7 @@
  */
 import type { ReactNode } from "react";
 import type { PublicBlog, PublicImage, PublicPostCard } from "~/server/dal/publicSite";
+import { SafeImage } from "~/components/blocks/SafeImage";
 
 /** Deterministic date rendering (no locale drift between server and client). */
 export function formatDate(iso: string): string {
@@ -93,11 +94,11 @@ export function PostCard({ blog, post }: { blog: PublicBlog; post: PublicPostCar
 
 function PostThumb({ image }: { image: PublicImage }) {
   return (
-    <img
+    <SafeImage
       src={image.url}
       alt={image.alt}
-      loading="lazy"
       className="h-40 w-full rounded-lg border border-neutral-200 object-cover sm:h-24"
+      placeholderClassName="flex h-40 w-full items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-neutral-100 px-2 text-center text-[10px] font-medium uppercase tracking-wider text-neutral-400 sm:h-24"
     />
   );
 }
