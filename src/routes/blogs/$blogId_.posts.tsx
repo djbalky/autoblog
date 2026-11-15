@@ -49,6 +49,8 @@ function PostsRoute() {
       role={data.role ?? "member"}
       posts={data.posts}
       counts={data.counts}
+      scheduler={data.scheduler}
+      queue={data.queue}
     />
   );
 }

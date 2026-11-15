@@ -614,4 +614,35 @@ export const SCHEMA_STATEMENTS: string[] = [
   // NOTE: `agent_runs.content_job_id` + its index are added in db.ts migrate()
   // right after the column, because SQLite has no ADD COLUMN IF NOT EXISTS and
   // an index on a not-yet-added column would fail on an existing database.
+
+  // ---- Phase 5e: publishing engine (URL history + worker heartbeat) --------
+  // Mirrors the Postgres extension statements in pgSchema.ts. Paths are
+  // root-relative and include the blog slug; UNIQUE(blog_id, from_path) is what
+  // the redirect writer upserts on.
+  `
+  CREATE TABLE IF NOT EXISTS redirects (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    blog_id    INTEGER NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+    from_path  TEXT NOT NULL,
+    to_path    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (blog_id, from_path)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_redirects_blog_from ON redirects(blog_id, from_path)`,
+  `CREATE INDEX IF NOT EXISTS idx_redirects_to ON redirects(blog_id, to_path)`,
+
+  // The publishing worker's honest heartbeat — one row, rewritten by the worker
+  // on start and after every tick; the admin panel reads it.
+  `
+  CREATE TABLE IF NOT EXISTS scheduler_state (
+    name             TEXT PRIMARY KEY,
+    instance_id      TEXT NOT NULL DEFAULT '',
+    pid              INTEGER,
+    started_at       TEXT NOT NULL DEFAULT '',
+    last_tick_at     TEXT,
+    last_published   INTEGER NOT NULL DEFAULT 0,
+    last_error       TEXT NOT NULL DEFAULT '',
+    interval_seconds INTEGER NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL
+  )`,
 ];

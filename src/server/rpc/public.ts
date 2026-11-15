@@ -19,9 +19,17 @@ import {
   type PublicBlogHome,
   type PublicContent,
 } from "../dal/publicSite";
+import { resolvePublicRedirect } from "../dal/redirects";
 
 export type PublicBlogHomeResult = { found: false } | { found: true; home: PublicBlogHome };
 export type PublicContentResult = { found: false } | { found: true; content: PublicContent };
+
+/**
+ * Phase 5e: the path an old public URL now lives at, or null. Used for
+ * client-side navigation; a full page load is answered with a real 301 by
+ * `serve.ts` before the app even renders.
+ */
+export type PublicRedirectResult = { to: string | null };
 
 interface BlogHomeInput {
   blogSlug: string;
@@ -57,4 +65,21 @@ export const publicContentAction = createServerFn()
       nowIso()
     );
     return content ? { found: true, content } : { found: false };
+  });
+
+/**
+ * Phase 5e — resolve an old public URL to where the content lives now.
+ * Returns `{ to: null }` when there is no usable redirect (unknown path, a path
+ * that is live again, or a target that is no longer published).
+ */
+export const publicRedirectAction = createServerFn()
+  .validator(asContent)
+  .handler(async ({ data }): Promise<PublicRedirectResult> => {
+    await ensureInitialized();
+    const to = await resolvePublicRedirect(
+      String(data.blogSlug ?? ""),
+      String(data.slug ?? ""),
+      nowIso()
+    );
+    return { to };
   });

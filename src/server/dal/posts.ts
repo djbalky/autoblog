@@ -11,6 +11,8 @@
 
 import { get, run, all, nowIso } from "../store";
 import { slugify } from "./blogs";
+import { logActivity } from "./activity";
+import { recordSlugRedirect } from "./redirects";
 
 export type PostStatus = "draft" | "pending" | "published" | "scheduled" | "trashed";
 
@@ -390,7 +392,38 @@ export async function savePostForMember(
   if (res.changes === 0) return null;
 
   await insertRevision(postId, next.title, next.content, next.excerpt, userId);
+
+  // Phase 5e — a published post that was renamed keeps its old URL alive: the
+  // old path 301s to the new one (src/server/dal/redirects.ts).
+  if (slug !== current.slug && (current.published_at != null || status === "published")) {
+    await recordSlugRedirect({
+      blogId: current.blog_id,
+      blogSlug: await blogSlugOf(current.blog_id),
+      oldSlug: current.slug,
+      newSlug: slug,
+    });
+  }
+
+  // Phase 5e — the audit row a manual publish writes (the publishing worker
+  // writes the same action with user_id = NULL when it publishes on schedule).
+  if (status === "published" && current.status !== "published") {
+    await logActivity({
+      userId,
+      blogId: current.blog_id,
+      action: "post.published",
+      entityType: "post",
+      entityId: postId,
+      detail: "Published from the editor",
+    });
+  }
+
   return getPostForMember(postId, userId);
+}
+
+/** The public slug of a blog, for building redirect paths ("" when unknown). */
+async function blogSlugOf(blogId: number): Promise<string> {
+  const row = await get<{ slug: unknown }>("SELECT slug FROM blogs WHERE id = ?", blogId);
+  return row ? String(row.slug ?? "") : "";
 }
 
 /** Change only the lifecycle status (publish / unpublish / schedule / trash). */

@@ -266,7 +266,7 @@ export function PostEditor({ blog, role, post, revisions }: PostEditorProps) {
     if (saved) {
       setNotice({
         kind: "ok",
-        text: `Scheduled for ${fmt(saved.post.scheduled_at)}. The status is stored in the database; the publishing engine that acts on it ships in Phase 5.`,
+        text: `Scheduled for ${fmt(saved.post.scheduled_at)}. The publishing worker checks every 30 seconds and will publish it at that time — the scheduler panel on the posts screen shows it queued, then published.`,
       });
     }
   }
