@@ -11,6 +11,9 @@
 import handler from "./dist/server/server.js";
 import { mediaIdFromPath, serveMedia } from "./src/server/mediaServe";
 import { seoResponse } from "./src/server/seoRoutes";
+import { ensureInitialized } from "./src/server/init";
+import { startPublishingScheduler } from "./src/server/scheduler";
+import { redirectTargetForRequest } from "./src/server/publicRedirects";
 
 // Pinned, NOT read from the environment. The published preview URL
 // (<label>.<PUBLIC_SITE_DOMAIN>) is reverse-proxied to 0.0.0.0:3000 inside the
@@ -35,6 +38,21 @@ const freePort =
 // gap between freeing and binding (last publish wins). Bun.serve throws EADDRINUSE
 // synchronously, so without this a raced publish would die while the shell already
 // reported success.
+//
+// Phase 5e — the publishing engine starts HERE, in the process that serves the
+// site: migrate/seed first (the worker needs the `redirects` + `scheduler_state`
+// tables), then the in-process worker. There is no cron in this environment, so a
+// timer inside this process is the honest mechanism. A database that is
+// unreachable at boot is logged and does not stop the site from serving; the
+// worker retries on its next tick and the admin panel says plainly that it is not
+// running.
+try {
+  await ensureInitialized();
+  startPublishingScheduler();
+} catch (err) {
+  console.error("[boot] database init failed:", err instanceof Error ? err.message : err);
+}
+
 for (let attempt = 1; ; attempt++) {
   await Bun.$`sudo sh -c ${freePort}`.quiet().nothrow();
   try {
@@ -66,7 +84,24 @@ for (let attempt = 1; ; attempt++) {
         // same reason /media/<id> is. See src/server/seoRoutes.ts.
         const seoRes = await seoResponse(req);
         if (seoRes) return seoRes;
-        return (handler as { fetch: (r: Request) => Response | Promise<Response> }).fetch(req);
+        const res = await (handler as { fetch: (r: Request) => Response | Promise<Response> }).fetch(req);
+        // Phase 5e: a renamed post/page keeps its old URL alive. Only consulted
+        // when the app itself answered 404, so a redirect can never shadow live
+        // content or an app route. See src/server/publicRedirects.ts.
+        if (res.status === 404) {
+          const decision = await redirectTargetForRequest(req);
+          if (decision) {
+            return new Response(null, {
+              status: 301,
+              headers: {
+                Location: decision.location,
+                "Cache-Control": "public, max-age=300",
+                "X-Redirect-From": decision.from,
+              },
+            });
+          }
+        }
+        return res;
       },
     });
     break;

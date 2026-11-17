@@ -16,6 +16,8 @@
 import { get, run, all, nowIso } from "../store";
 import { slugify } from "./blogs";
 import { getBlogMembership } from "./posts";
+import { logActivity } from "./activity";
+import { recordSlugRedirect } from "./redirects";
 
 export type PageStatus = "draft" | "published" | "scheduled" | "trashed";
 
@@ -335,6 +337,31 @@ export async function savePageForMember(
   if (res.changes === 0) return null;
 
   const revisionNumber = await insertRevision(pageId, next.title, next.content, userId);
+
+  // Phase 5e — a published page that was renamed keeps its old URL alive: the
+  // old path 301s to the new one (src/server/dal/redirects.ts).
+  if (slug !== current.slug && (current.published_at != null || status === "published")) {
+    const blog = await get<{ slug: unknown }>("SELECT slug FROM blogs WHERE id = ?", current.blog_id);
+    await recordSlugRedirect({
+      blogId: current.blog_id,
+      blogSlug: blog ? String(blog.slug ?? "") : "",
+      oldSlug: current.slug,
+      newSlug: slug,
+    });
+  }
+
+  // Phase 5e — the audit row a manual publish writes.
+  if (status === "published" && current.status !== "published") {
+    await logActivity({
+      userId,
+      blogId: current.blog_id,
+      action: "page.published",
+      entityType: "page",
+      entityId: pageId,
+      detail: "Published from the page builder",
+    });
+  }
+
   const page = await getPageForMember(pageId, userId);
   return page ? { page, revisionNumber } : null;
 }

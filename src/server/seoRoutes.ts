@@ -13,10 +13,13 @@
  * blog answers 404 here exactly like its pages do, and drafts / scheduled /
  * trashed / future-dated content never appears in a sitemap or a feed.
  *
- * Absolute URLs are built from the origin of THIS request (proxy headers first),
- * never from a hardcoded host.
+ * Absolute URLs are built from the PUBLIC origin — `src/server/publicOrigin.ts`,
+ * i.e. `PUBLIC_ORIGIN` when set, else the site's real published address (Phase
+ * 5e). The request's own host is only used when `PUBLIC_ORIGIN=request`, which is
+ * what keeps the proxy's preview host out of a sitemap.
  */
 import { ensureInitialized } from "./init";
+import { publicOriginForRequest } from "./publicOrigin";
 import { nowIso } from "./store";
 import {
   getPublicSitemap,
@@ -46,6 +49,14 @@ export function requestOrigin(req: Request): string {
   const safeProto = /^https?$/.test(proto) ? proto : url.protocol.replace(":", "");
   const safeHost = /^[A-Za-z0-9._\-:[\]]+$/.test(host) ? host : url.host;
   return `${safeProto}://${safeHost}`;
+}
+
+/**
+ * The origin every absolute URL in these documents uses: the configured public
+ * origin when there is one, else the request's own origin (`PUBLIC_ORIGIN=request`).
+ */
+export function publicOrigin(req: Request): string {
+  return publicOriginForRequest(requestOrigin(req));
 }
 
 function xmlResponse(body: string, status = 200): Response {
@@ -86,7 +97,7 @@ export async function seoResponse(req: Request): Promise<Response | null> {
   const blogMatch = BLOG_XML_PATH.exec(pathname);
   if (!isRobots && !isIndex && !blogMatch) return null;
 
-  const origin = requestOrigin(req);
+  const origin = publicOrigin(req);
   const method = req.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
     return new Response("Method not allowed", {

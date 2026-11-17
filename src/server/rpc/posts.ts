@@ -25,6 +25,12 @@ import {
   type PostRow,
   type PostStatus,
 } from "../dal/posts";
+import {
+  getSchedulerState,
+  listQueuedPostsForMember,
+  type QueuedPost,
+  type SchedulerState,
+} from "../scheduler";
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -50,6 +56,10 @@ export interface PostsIndexData {
   role: string | null;
   posts: PostListItem[];
   counts: Record<string, number>;
+  /** Phase 5e: the publishing worker's honest state (running / last tick). */
+  scheduler: SchedulerState;
+  /** Phase 5e: this blog's scheduled posts, soonest first. */
+  queue: QueuedPost[];
 }
 
 export const postsIndexAction = createServerFn()
@@ -58,21 +68,27 @@ export const postsIndexAction = createServerFn()
     await ensureInitialized();
     const user = await requireUser();
     const blogId = Number(data.blogId);
+    // The worker state is not blog data, so a non-member still sees the truth
+    // about the scheduler — but never this blog's queue.
+    const scheduler = await getSchedulerState();
     const empty: PostsIndexData = {
       forbidden: true,
       blog: null,
       role: null,
       posts: [],
       counts: {},
+      scheduler,
+      queue: [],
     };
     if (!Number.isFinite(blogId)) return empty;
     const blog = await getBlog(blogId);
     if (!blog) return empty;
     const membership = await getBlogMembership(blogId, user.id);
     if (!membership) return empty;
-    const [posts, counts] = await Promise.all([
+    const [posts, counts, queue] = await Promise.all([
       listPostsForMember(blogId, user.id),
       postStatusCounts(blogId, user.id),
+      listQueuedPostsForMember(blogId, user.id),
     ]);
     return {
       forbidden: false,
@@ -80,6 +96,8 @@ export const postsIndexAction = createServerFn()
       role: membership.role,
       posts,
       counts,
+      scheduler,
+      queue,
     };
   });
 

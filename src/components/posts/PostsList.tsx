@@ -12,6 +12,8 @@ import {
   duplicatePostAction,
 } from "../../server/rpc/posts";
 import type { PostListItem, PostStatus } from "../../server/dal/posts";
+import type { QueuedPost, SchedulerState } from "../../server/scheduler";
+import { SchedulerPanel } from "./SchedulerPanel";
 
 const STATUS_BADGE: Record<string, string> = {
   published: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
@@ -41,9 +43,12 @@ export interface PostsListProps {
   role: string;
   posts: PostListItem[];
   counts: Record<string, number>;
+  /** Phase 5e: honest publishing-worker state + this blog's queued posts. */
+  scheduler: SchedulerState;
+  queue: QueuedPost[];
 }
 
-export function PostsList({ blog, role, posts, counts }: PostsListProps) {
+export function PostsList({ blog, role, posts, counts, scheduler, queue }: PostsListProps) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | PostStatus>("all");
   const [busy, setBusy] = useState(false);
@@ -128,6 +133,12 @@ export function PostsList({ blog, role, posts, counts }: PostsListProps) {
       </header>
 
       <div className="mx-auto max-w-6xl px-6 py-8">
+        <SchedulerPanel
+          scheduler={scheduler}
+          queue={queue}
+          blogSlug={blog.slug}
+          blogId={blog.id}
+        />
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-neutral-900">All posts</h2>

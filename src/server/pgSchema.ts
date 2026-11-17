@@ -158,6 +158,40 @@ export const PG_EXTENSION_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_media_uploader ON media(uploader_id)`,
   // The library always reads a blog's media newest-first.
   `CREATE INDEX IF NOT EXISTS idx_media_blog_created ON media(blog_id, created_at DESC)`,
+
+  // ---- Phase 5e: publishing engine ----------------------------------------
+  // URL history: one row per old public path that must 301 to the current one.
+  // Paths are root-relative and already carry the blog slug ("/blog/old-slug"),
+  // so a redirect can never point outside its own blog. UNIQUE(blog_id,
+  // from_path) is what makes "one redirect per old URL" enforceable, and the
+  // writer upserts on it.
+  `CREATE TABLE IF NOT EXISTS redirects (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    blog_id    BIGINT NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+    from_path  TEXT NOT NULL,
+    to_path    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (blog_id, from_path)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_redirects_blog_from ON redirects(blog_id, from_path)`,
+  `CREATE INDEX IF NOT EXISTS idx_redirects_to ON redirects(blog_id, to_path)`,
+
+  // The publishing worker's honest heartbeat. ONE row (name = 'publishing');
+  // the worker rewrites it on start and after every tick, and the admin panel
+  // reads it to say whether the worker is really running and when it last ran.
+  // Nothing else writes this table, so it can never claim a tick that did not
+  // happen.
+  `CREATE TABLE IF NOT EXISTS scheduler_state (
+    name             TEXT PRIMARY KEY,
+    instance_id      TEXT NOT NULL DEFAULT '',
+    pid              BIGINT,
+    started_at       TEXT NOT NULL DEFAULT '',
+    last_tick_at     TEXT,
+    last_published   BIGINT NOT NULL DEFAULT 0,
+    last_error       TEXT NOT NULL DEFAULT '',
+    interval_seconds BIGINT NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL
+  )`,
 ];
 
 export const PG_SCHEMA_STATEMENTS: string[] = [

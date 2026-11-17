@@ -18,8 +18,8 @@
  * goes in through the router's `script:ld+json` meta, which JSON-escapes it, so
  * a title can never break out of the `<script>`.
  */
-import { createFileRoute, notFound } from "@tanstack/react-router";
-import { publicContentAction } from "~/server/rpc/public";
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
+import { publicContentAction, publicRedirectAction } from "~/server/rpc/public";
 import type { PublicContent } from "~/server/dal/publicSite";
 import { setHttpStatus } from "~/server/httpStatus";
 import { currentOrigin } from "~/server/origin";
@@ -42,6 +42,15 @@ export const Route = createFileRoute("/$blogSlug_/$contentSlug")({
       data: { blogSlug: params.blogSlug, slug: params.contentSlug },
     });
     if (!res.found) {
+      // Phase 5e: this URL may have been renamed. A full page load is answered
+      // with a real 301 by serve.ts before the app renders; this covers
+      // in-app navigation, where there is no HTTP response to set.
+      if (!import.meta.env.SSR) {
+        const renamed = await publicRedirectAction({
+          data: { blogSlug: params.blogSlug, slug: params.contentSlug },
+        });
+        if (renamed.to) throw redirect({ href: renamed.to, statusCode: 301 });
+      }
       await setHttpStatus(404);
       throw notFound();
     }

@@ -111,6 +111,8 @@ const IDLESS_TABLES = new Set([
   "user_roles",
   "post_categories",
   "post_tags",
+  // Phase 5e: the publishing worker's heartbeat is keyed by `name`, not `id`.
+  "scheduler_state",
 ]);
 
 /** Extract the target table name from an INSERT ... INTO <table> clause. */
