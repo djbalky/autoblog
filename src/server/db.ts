@@ -93,6 +93,10 @@ export function migrate(db: Database): void {
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_media_blog_created ON media(blog_id, created_at DESC)"
     );
+    // Phase 6a: what a ContentJob is about, and the worker's free-text note.
+    ensureColumn(db, "content_jobs", "topic", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "content_jobs", "brief", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "scheduler_state", "last_note", "TEXT NOT NULL DEFAULT ''");
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

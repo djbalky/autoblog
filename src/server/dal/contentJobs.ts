@@ -14,6 +14,7 @@ import { all, get, run, nowIso } from "../store";
 
 /** The documented pipeline order. Index order is the progression order. */
 export const CONTENT_JOB_PIPELINE = [
+  "queued",
   "research",
   "brief",
   "draft",
@@ -42,6 +43,7 @@ export const TERMINAL_JOB_STATUSES: ContentJobStatus[] = [
 
 /** The agent that normally owns each pipeline step. */
 export const STEP_AGENT: Record<string, string> = {
+  queued: "research",
   research: "research",
   brief: "topic_keyword",
   draft: "writer",
@@ -62,6 +64,10 @@ export interface ContentJobRow {
   target_post_id: number | null;
   status: ContentJobStatus;
   current_agent: string | null;
+  /** What the job is about (the topic the automation picked or the operator typed). */
+  topic: string;
+  /** The optional brief the operator gave with the topic. */
+  brief: string;
   started_at: string;
   deadline: string | null;
   result: string;
@@ -102,6 +108,8 @@ function mapJob(row: Record<string, unknown>): ContentJobRow {
       row.current_agent === null || row.current_agent === undefined
         ? null
         : String(row.current_agent),
+    topic: String(row.topic ?? ""),
+    brief: String(row.brief ?? ""),
     started_at: String(row.started_at ?? ""),
     deadline:
       row.deadline === null || row.deadline === undefined
@@ -167,6 +175,41 @@ export async function listContentJobs(blogId?: number): Promise<ContentJobRow[]>
   return rows.map(mapJob);
 }
 
+/** Jobs of one blog, newest first — only for a member of that blog. */
+export async function listContentJobsForMember(
+  blogId: number,
+  userId: number
+): Promise<ContentJobRow[]> {
+  const rows = await all<Record<string, unknown>>(
+    `SELECT j.*
+       FROM content_jobs j
+       JOIN blog_members bm ON bm.blog_id = j.blog_id AND bm.user_id = ?
+      WHERE j.blog_id = ?
+      ORDER BY j.created_at DESC, j.id DESC`,
+    userId,
+    blogId
+  );
+  return rows.map(mapJob);
+}
+
+/** One job of one blog, or null when the caller is not a member of that blog. */
+export async function getContentJobForMember(
+  jobId: number,
+  blogId: number,
+  userId: number
+): Promise<ContentJobRow | null> {
+  const row = await get<Record<string, unknown>>(
+    `SELECT j.*
+       FROM content_jobs j
+       JOIN blog_members bm ON bm.blog_id = j.blog_id AND bm.user_id = ?
+      WHERE j.id = ? AND j.blog_id = ?`,
+    userId,
+    jobId,
+    blogId
+  );
+  return row ? mapJob(row) : null;
+}
+
 /** Audit trail for one job, oldest first. */
 export async function listContentJobEvents(
   jobId: number
@@ -186,43 +229,86 @@ export async function listContentJobEvents(
   }));
 }
 
+/** A real `agent_runs` row attributed to a job, flattened for the UI. */
+export interface AgentRunSummary {
+  id: number;
+  agent_id: number;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  log: string;
+}
+
 /** Agent runs attributed to a job (the ContentJob -> AgentRuns edge). */
 export async function listAgentRunsForJob(
   jobId: number
-): Promise<Record<string, unknown>[]> {
-  return all<Record<string, unknown>>(
+): Promise<AgentRunSummary[]> {
+  const rows = await all<Record<string, unknown>>(
     "SELECT * FROM agent_runs WHERE content_job_id = ? ORDER BY started_at ASC, id ASC",
     jobId
   );
+  return rows.map((r) => ({
+    id: toNum(r.id),
+    agent_id: toNum(r.agent_id),
+    status: String(r.status ?? ""),
+    started_at: String(r.started_at ?? ""),
+    finished_at:
+      r.finished_at === null || r.finished_at === undefined
+        ? null
+        : String(r.finished_at),
+    log: String(r.log ?? ""),
+  }));
 }
 
 // ---- Writes ----------------------------------------------------------------
 
 /**
- * Create a job in the `research` status. `targetPostId` stays null until a post
- * exists (see linkContentJobPost). Records a `created` event.
+ * Create a job. `status` defaults to `research` (the Phase 1 behaviour); the
+ * Phase 6a operator/automation entry point passes `queued`, which is the
+ * pipeline's first step and stays there until an agent run really picks it up.
+ * `targetPostId` stays null until a post exists (see linkContentJobPost).
+ * Records a `created` event carrying the topic, so the audit trail says what
+ * the job is about.
  */
 export async function createContentJob(
   blogId: number,
-  input: { targetPostId?: number | null; deadline?: string | null; agent?: string } = {}
+  input: {
+    targetPostId?: number | null;
+    deadline?: string | null;
+    agent?: string;
+    status?: Extract<ContentJobStatus, "queued" | "research">;
+    topic?: string;
+    brief?: string;
+  } = {}
 ): Promise<ContentJobRow> {
   const now = nowIso();
-  const agent = input.agent ?? STEP_AGENT.research;
+  const status = input.status ?? "research";
+  const agent = input.agent ?? STEP_AGENT[status] ?? STEP_AGENT.research;
+  const topic = (input.topic ?? "").trim();
+  const brief = (input.brief ?? "").trim();
   const info = await run(
     `INSERT INTO content_jobs
-       (blog_id, target_post_id, status, current_agent, started_at, deadline,
-        result, error, created_at, updated_at)
-     VALUES (?, ?, 'research', ?, ?, ?, '', '', ?, ?)`,
+       (blog_id, target_post_id, status, current_agent, topic, brief,
+        started_at, deadline, result, error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)`,
     blogId,
     input.targetPostId ?? null,
+    status,
     agent,
+    topic,
+    brief,
     now,
     input.deadline ?? null,
     now,
     now
   );
   const jobId = info.lastInsertRowid;
-  await addEvent(jobId, agent, "created", `status=research`);
+  await addEvent(
+    jobId,
+    agent,
+    "created",
+    topic ? `status=${status}; topic=${topic}` : `status=${status}`
+  );
   const job = await getContentJob(jobId);
   if (!job) throw new Error("createContentJob: row not found after insert");
   return job;
