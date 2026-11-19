@@ -30,12 +30,25 @@
 import { all, get, run, nowIso } from "./store";
 import { ensureInitialized } from "./init";
 import { logActivity } from "./dal/activity";
+import { getModelProviderState, notConfiguredReason } from "./ai/modelProvider";
+import {
+  listEnabledAutomations,
+  markAutomationEnqueued,
+  timeToMinutes,
+} from "./dal/automations";
+import { createContentJob } from "./dal/contentJobs";
 
 /** The single row name this worker owns in `scheduler_state`. */
 export const WORKER_NAME = "publishing";
 
+/** The automation half of the worker writes its own heartbeat row. */
+export const AUTOMATION_WORKER_NAME = "automation";
+
 /** How often the worker looks for due posts (the brief asks for at least once a minute). */
 export const TICK_INTERVAL_MS = 30_000;
+
+/** How many minutes after a publish slot the automation still counts it as due. */
+const SLOT_WINDOW_MINUTES = 3;
 
 /** A heartbeat older than this many intervals means the worker is NOT running. */
 const STALE_FACTOR = 3;
@@ -58,6 +71,8 @@ export interface TickResult {
   at: string;
   durationMs: number;
   published: PublishedByWorker[];
+  /** Phase 6a: what the automation half of the same tick did (honestly). */
+  automation: AutomationTickResult;
   error: string;
 }
 
@@ -128,27 +143,205 @@ export async function tickPublishing(now: string = nowIso()): Promise<TickResult
     console.error("[scheduler] heartbeat write failed:", err instanceof Error ? err.message : err);
   });
 
+  // Phase 6a: the same tick also asks each enabled blog whether an automation
+  // slot is due. This never fabricates anything (see tickAutomation).
+  const automation = await tickAutomation(now).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[scheduler] automation tick failed:", message);
+    return {
+      at: now,
+      checked: 0,
+      due: 0,
+      enqueued: [],
+      skipped: [],
+      providerConfigured: false,
+      note: `Automation tick failed: ${message}`,
+    } satisfies AutomationTickResult;
+  });
+
   if (published.length > 0) {
     console.log(
       `[scheduler] published ${String(published.length)} scheduled post(s): ` +
         published.map((p) => `#${String(p.id)} "${p.title}"`).join(", ")
     );
   }
-  return { at: now, durationMs, published, error };
+  return { at: now, durationMs, published, automation, error };
 }
 
-/** Rewrite the worker's single heartbeat row (start + every tick). */
+// ---- Phase 6a: the automation half of the tick ----------------------------
+
+export interface AutomationTickResult {
+  at: string;
+  /** Enabled automations on live blogs the tick looked at. */
+  checked: number;
+  /** How many of those had a publishing slot due at `at`. */
+  due: number;
+  /** Jobs really inserted by this tick (each one is a real content_jobs row). */
+  enqueued: { blogId: number; jobId: number; topic: string }[];
+  /** Due blogs where nothing was enqueued, with the honest reason why. */
+  skipped: { blogId: number; reason: string }[];
+  /** Whether a text-model key was present for this tick. */
+  providerConfigured: boolean;
+  /** One sentence describing the tick, written to the heartbeat row verbatim. */
+  note: string;
+}
+
+/** UTC "YYYY-MM-DD" of an ISO instant — the day bucket for the daily cap. */
+function utcDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Minutes since UTC midnight for an ISO instant. */
+function utcMinutes(iso: string): number {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 0;
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+/** How many jobs this blog already has for the UTC day of `now`. */
+async function jobsCreatedToday(blogId: number, now: string): Promise<number> {
+  const dayStart = `${utcDay(now)}T00:00:00.000Z`;
+  const row = await get<{ n: unknown }>(
+    "SELECT COUNT(*) AS n FROM content_jobs WHERE blog_id = ? AND created_at >= ?",
+    blogId,
+    dayStart
+  );
+  return num(row?.n);
+}
+
+/**
+ * One automation pass. Honesty rules:
+ *  - A slot is "due" only inside a small window after its HH:MM (UTC, the same
+ *    clock the times are stored in), so a restart does not backfill a whole day.
+ *  - Nothing is enqueued unless a text-model provider is really configured
+ *    (`getModelProviderState()`), because a job that no agent can ever pick up
+ *    would be a lie in the queue. The reason is written to the heartbeat row and
+ *    logged, so the UI can show exactly why a due slot produced no job.
+ *  - It never writes a post, a revision or a result: it can only insert a
+ *    ContentJob row in `queued`.
+ */
+export async function tickAutomation(
+  now: string = nowIso()
+): Promise<AutomationTickResult> {
+  const result: AutomationTickResult = {
+    at: now,
+    checked: 0,
+    due: 0,
+    enqueued: [],
+    skipped: [],
+    providerConfigured: false,
+    note: "",
+  };
+
+  await ensureInitialized();
+  const provider = getModelProviderState();
+  result.providerConfigured = provider.configured;
+
+  const configs = await listEnabledAutomations();
+  result.checked = configs.length;
+  const nowMinutes = utcMinutes(now);
+
+  for (const config of configs) {
+    // Is any configured slot due right now?
+    const dueSlot = config.publishTimes.find((time) => {
+      const minutes = timeToMinutes(time);
+      const delta = nowMinutes - minutes;
+      if (delta < 0 || delta > SLOT_WINDOW_MINUTES) return false;
+      // Already enqueued for this slot today?
+      const slotIso = `${utcDay(now)}T${time}:00.000Z`;
+      return !config.lastEnqueuedAt || config.lastEnqueuedAt < slotIso;
+    });
+    if (!dueSlot) continue;
+    result.due += 1;
+
+    if (!provider.configured) {
+      result.skipped.push({ blogId: config.blogId, reason: notConfiguredReason() });
+      continue;
+    }
+    const created = await jobsCreatedToday(config.blogId, now);
+    if (created >= config.postsPerDay) {
+      result.skipped.push({
+        blogId: config.blogId,
+        reason: `Daily limit reached (${String(created)}/${String(config.postsPerDay)} jobs today).`,
+      });
+      continue;
+    }
+    if (config.topics.length === 0) {
+      result.skipped.push({
+        blogId: config.blogId,
+        reason: "No topics configured — add at least one topic on the automation screen.",
+      });
+      continue;
+    }
+    const topic = config.topics[created % config.topics.length];
+    const job = await createContentJob(config.blogId, {
+      status: "queued",
+      topic,
+      brief: `Enqueued by the automation worker for the ${dueSlot} UTC slot.`,
+    });
+    await markAutomationEnqueued(config.blogId, now);
+    result.enqueued.push({ blogId: config.blogId, jobId: job.id, topic });
+  }
+
+  result.note = buildAutomationNote(result, provider.message);
+  await writeHeartbeat({
+    at: now,
+    publishedCount: result.enqueued.length,
+    error: "",
+    name: AUTOMATION_WORKER_NAME,
+    note: result.note,
+  }).catch((err) => {
+    console.error(
+      "[scheduler] automation heartbeat write failed:",
+      err instanceof Error ? err.message : err
+    );
+  });
+  if (result.enqueued.length > 0) {
+    console.log(
+      `[scheduler] automation enqueued ${String(result.enqueued.length)} job(s): ` +
+        result.enqueued.map((e) => `blog #${String(e.blogId)} -> job #${String(e.jobId)}`).join(", ")
+    );
+  } else if (result.due > 0) {
+    console.log(`[scheduler] automation: ${result.note}`);
+  }
+  return result;
+}
+
+/** One honest sentence for the heartbeat row and the UI. */
+function buildAutomationNote(result: AutomationTickResult, providerMessage: string): string {
+  if (result.checked === 0) {
+    return "No blog has automation enabled — nothing was due.";
+  }
+  if (result.due === 0) {
+    return `${String(result.checked)} enabled blog(s) checked; no publishing slot was due at ${result.at}.`;
+  }
+  if (result.enqueued.length === 0) {
+    const reasons = Array.from(new Set(result.skipped.map((s) => s.reason)));
+    return `${String(result.due)} slot(s) due, 0 job(s) enqueued: ${reasons.join(" ")}`;
+  }
+  return `${String(result.enqueued.length)} job(s) enqueued for ${String(
+    result.due
+  )} due slot(s). ${providerMessage}`;
+}
+
+/** Rewrite one worker heartbeat row (start + every tick). */
 async function writeHeartbeat(input: {
   at: string;
   publishedCount: number;
   error: string;
   started?: boolean;
+  /** Which heartbeat row to write; defaults to the publishing worker. */
+  name?: string;
+  /** Free-text note shown verbatim in the UI (Phase 6a). */
+  note?: string;
 }): Promise<void> {
   const pid = typeof process !== "undefined" && process ? process.pid : 0;
   await run(
     `INSERT INTO scheduler_state
-       (name, instance_id, pid, started_at, last_tick_at, last_published, last_error, interval_seconds, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (name, instance_id, pid, started_at, last_tick_at, last_published, last_error, interval_seconds, last_note, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET
        instance_id = excluded.instance_id,
        pid = excluded.pid,
@@ -156,8 +349,9 @@ async function writeHeartbeat(input: {
        last_published = excluded.last_published,
        last_error = excluded.last_error,
        interval_seconds = excluded.interval_seconds,
+       last_note = excluded.last_note,
        updated_at = excluded.updated_at`,
-    WORKER_NAME,
+    input.name ?? WORKER_NAME,
     INSTANCE_ID,
     pid,
     BOOT_AT,
@@ -165,6 +359,7 @@ async function writeHeartbeat(input: {
     input.publishedCount,
     input.error,
     Math.round(TICK_INTERVAL_MS / 1000),
+    input.note ?? "",
     nowIso()
   );
 }
@@ -238,6 +433,8 @@ export interface SchedulerState {
   lastPublished: number;
   /** The error the last tick hit, "" when it succeeded. */
   lastError: string;
+  /** Free-text note the last tick wrote (Phase 6a automation reason, …). */
+  lastNote: string;
   /** Age of the heartbeat in seconds, null when there is none. */
   heartbeatAgeSeconds: number | null;
   /** True when the worker writes to the same database this page reads. */
@@ -247,7 +444,7 @@ export interface SchedulerState {
 /** Read the heartbeat row and turn it into a state the UI can show truthfully. */
 export async function getSchedulerState(): Promise<SchedulerState> {
   const row = await get<Record<string, unknown>>(
-    "SELECT instance_id, pid, started_at, last_tick_at, last_published, last_error, interval_seconds FROM scheduler_state WHERE name = ?",
+    "SELECT instance_id, pid, started_at, last_tick_at, last_published, last_error, interval_seconds, last_note FROM scheduler_state WHERE name = ?",
     WORKER_NAME
   );
   const intervalSeconds = num(row?.interval_seconds) || Math.round(TICK_INTERVAL_MS / 1000);
@@ -262,8 +459,49 @@ export async function getSchedulerState(): Promise<SchedulerState> {
     intervalSeconds,
     lastPublished: num(row?.last_published),
     lastError: str(row?.last_error),
+    lastNote: str(row?.last_note),
     heartbeatAgeSeconds: ageSeconds,
     heartbeatPresent: Boolean(row),
+  };
+}
+
+export interface AutomationWorkerState {
+  /** True when the automation heartbeat is fresh — the same worker process. */
+  running: boolean;
+  lastTickAt: string | null;
+  /** Jobs the last automation tick really enqueued. */
+  lastEnqueued: number;
+  /** The last tick's own sentence: what it checked and why nothing happened. */
+  note: string;
+  /** The last tick's error, "" when it succeeded. */
+  lastError: string;
+  heartbeatAgeSeconds: number | null;
+  heartbeatPresent: boolean;
+  intervalSeconds: number;
+}
+
+/**
+ * The automation half of the worker's heartbeat — the honest answer to
+ * "did the scheduler look at my blog, and what did it decide?".
+ */
+export async function getAutomationWorkerState(): Promise<AutomationWorkerState> {
+  const row = await get<Record<string, unknown>>(
+    "SELECT last_tick_at, last_published, last_error, last_note, interval_seconds FROM scheduler_state WHERE name = ?",
+    AUTOMATION_WORKER_NAME
+  );
+  const intervalSeconds = num(row?.interval_seconds) || Math.round(TICK_INTERVAL_MS / 1000);
+  const lastTickAt = str(row?.last_tick_at) || null;
+  const lastMs = lastTickAt ? new Date(lastTickAt).getTime() : NaN;
+  const ageSeconds = Number.isNaN(lastMs) ? null : Math.max(0, Math.round((Date.now() - lastMs) / 1000));
+  return {
+    running: ageSeconds !== null && ageSeconds <= intervalSeconds * STALE_FACTOR,
+    lastTickAt,
+    lastEnqueued: num(row?.last_published),
+    note: str(row?.last_note),
+    lastError: str(row?.last_error),
+    heartbeatAgeSeconds: ageSeconds,
+    heartbeatPresent: Boolean(row),
+    intervalSeconds,
   };
 }
 

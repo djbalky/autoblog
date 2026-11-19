@@ -588,8 +588,10 @@ export const SCHEMA_STATEMENTS: string[] = [
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     blog_id        INTEGER NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
     target_post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,
-    status         TEXT NOT NULL DEFAULT 'research',  -- research -> ... -> done | failed | canceled
+    status         TEXT NOT NULL DEFAULT 'research',  -- queued -> research -> ... -> done | failed | canceled
     current_agent  TEXT,
+    topic          TEXT NOT NULL DEFAULT '',
+    brief          TEXT NOT NULL DEFAULT '',
     started_at     TEXT NOT NULL,
     deadline       TEXT,
     result         TEXT NOT NULL DEFAULT '',
@@ -643,6 +645,35 @@ export const SCHEMA_STATEMENTS: string[] = [
     last_published   INTEGER NOT NULL DEFAULT 0,
     last_error       TEXT NOT NULL DEFAULT '',
     interval_seconds INTEGER NOT NULL DEFAULT 0,
+    last_note        TEXT NOT NULL DEFAULT '',
     updated_at       TEXT NOT NULL
   )`,
+
+  // ---- Phase 6a: per-blog automation configuration ------------------------
+  // ONE row per blog (UNIQUE blog_id) holding exactly what the automation
+  // screen edits. Mirrors the Postgres extension statements in pgSchema.ts.
+  // JSON-in-TEXT columns (publish_times, topics, social_networks) keep the
+  // schema identical on both backends; the DAL is the only reader/writer.
+  `
+  CREATE TABLE IF NOT EXISTS blog_automations (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    blog_id                 INTEGER NOT NULL UNIQUE REFERENCES blogs(id) ON DELETE CASCADE,
+    enabled                 INTEGER NOT NULL DEFAULT 0,
+    posts_per_day           INTEGER NOT NULL DEFAULT 2,
+    publish_times           TEXT NOT NULL DEFAULT '["09:00","17:00"]',
+    topics                  TEXT NOT NULL DEFAULT '[]',
+    language                TEXT NOT NULL DEFAULT 'en',
+    tone                    TEXT NOT NULL DEFAULT 'informative',
+    target_audience         TEXT NOT NULL DEFAULT '',
+    min_word_count          INTEGER NOT NULL DEFAULT 1200,
+    seo_require_meta        INTEGER NOT NULL DEFAULT 1,
+    seo_require_internal_links INTEGER NOT NULL DEFAULT 1,
+    seo_keywords            TEXT NOT NULL DEFAULT '',
+    approval_mode           TEXT NOT NULL DEFAULT 'manual',  -- automatic | manual
+    social_networks         TEXT NOT NULL DEFAULT '[]',
+    last_enqueued_at        TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blog_automations_enabled ON blog_automations(enabled)`,
 ];

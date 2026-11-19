@@ -192,6 +192,42 @@ export const PG_EXTENSION_STATEMENTS: string[] = [
     interval_seconds BIGINT NOT NULL DEFAULT 0,
     updated_at       TEXT NOT NULL
   )`,
+
+  // ---- Phase 6a: per-blog automation configuration ------------------------
+  // The automation screen's storage: ONE row per blog, created on first save
+  // (the screen shows defaults until then). JSON-in-TEXT for the list columns
+  // (publish_times, topics, social_networks) keeps both backends identical and
+  // keeps the DAL the only place that parses them.
+  `CREATE TABLE IF NOT EXISTS blog_automations (
+    id                         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    blog_id                    BIGINT NOT NULL UNIQUE REFERENCES blogs(id) ON DELETE CASCADE,
+    enabled                    INTEGER NOT NULL DEFAULT 0,
+    posts_per_day              BIGINT NOT NULL DEFAULT 2,
+    publish_times              TEXT NOT NULL DEFAULT '["09:00","17:00"]',
+    topics                     TEXT NOT NULL DEFAULT '[]',
+    language                   TEXT NOT NULL DEFAULT 'en',
+    tone                       TEXT NOT NULL DEFAULT 'informative',
+    target_audience            TEXT NOT NULL DEFAULT '',
+    min_word_count             BIGINT NOT NULL DEFAULT 1200,
+    seo_require_meta           INTEGER NOT NULL DEFAULT 1,
+    seo_require_internal_links INTEGER NOT NULL DEFAULT 1,
+    seo_keywords               TEXT NOT NULL DEFAULT '',
+    approval_mode              TEXT NOT NULL DEFAULT 'manual',
+    social_networks            TEXT NOT NULL DEFAULT '[]',
+    last_enqueued_at           TEXT,
+    created_at                 TEXT NOT NULL,
+    updated_at                 TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_blog_automations_enabled ON blog_automations(enabled)`,
+
+  // The job a manual "create job" (or the automation tick) enqueued needs to
+  // say WHAT it is about: content_jobs gained topic + brief.
+  `ALTER TABLE content_jobs ADD COLUMN IF NOT EXISTS topic TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE content_jobs ADD COLUMN IF NOT EXISTS brief TEXT NOT NULL DEFAULT ''`,
+
+  // The worker heartbeat gained a free-text note (why nothing was enqueued,
+  // "provider not configured", …) so the UI can explain an empty tick.
+  `ALTER TABLE scheduler_state ADD COLUMN IF NOT EXISTS last_note TEXT NOT NULL DEFAULT ''`,
 ];
 
 export const PG_SCHEMA_STATEMENTS: string[] = [
