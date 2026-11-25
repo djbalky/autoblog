@@ -118,6 +118,12 @@ function Dashboard() {
           </div>
           <div className="flex items-center gap-3">
             <Link
+              to="/connections"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+            >
+              Connections
+            </Link>
+            <Link
               to="/blogs/new"
               className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-white dark:text-neutral-900"
             >

@@ -30,7 +30,7 @@
 import { all, get, run, nowIso } from "./store";
 import { ensureInitialized } from "./init";
 import { logActivity } from "./dal/activity";
-import { getModelProviderState, notConfiguredReason } from "./ai/modelProvider";
+import { notConfiguredReason, resolveModelProviderState } from "./ai/modelProvider";
 import {
   listEnabledAutomations,
   markAutomationEnqueued,
@@ -236,8 +236,11 @@ export async function tickAutomation(
   };
 
   await ensureInitialized();
-  const provider = getModelProviderState();
-  result.providerConfigured = provider.configured;
+  // The provider is resolved per blog and read fresh from the DB on every tick,
+  // so a key connected on the Connections screen is picked up immediately
+  // (no restart): blog-scoped connection -> owner's workspace connection -> env.
+  const workspaceProvider = await resolveModelProviderState();
+  result.providerConfigured = workspaceProvider.configured;
 
   const configs = await listEnabledAutomations();
   result.checked = configs.length;
@@ -256,10 +259,12 @@ export async function tickAutomation(
     if (!dueSlot) continue;
     result.due += 1;
 
+    const provider = await resolveModelProviderState({ blogId: config.blogId });
     if (!provider.configured) {
       result.skipped.push({ blogId: config.blogId, reason: notConfiguredReason() });
       continue;
     }
+    result.providerConfigured = true;
     const created = await jobsCreatedToday(config.blogId, now);
     if (created >= config.postsPerDay) {
       result.skipped.push({
@@ -285,7 +290,7 @@ export async function tickAutomation(
     result.enqueued.push({ blogId: config.blogId, jobId: job.id, topic });
   }
 
-  result.note = buildAutomationNote(result, provider.message);
+  result.note = buildAutomationNote(result, workspaceProvider.message);
   await writeHeartbeat({
     at: now,
     publishedCount: result.enqueued.length,

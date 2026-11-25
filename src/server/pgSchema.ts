@@ -228,6 +228,27 @@ export const PG_EXTENSION_STATEMENTS: string[] = [
   // The worker heartbeat gained a free-text note (why nothing was enqueued,
   // "provider not configured", …) so the UI can explain an empty tick.
   `ALTER TABLE scheduler_state ADD COLUMN IF NOT EXISTS last_note TEXT NOT NULL DEFAULT ''`,
+
+  // ---- Phase 6b-prep: Connections hub -------------------------------------
+  // `integrations` was blog-scoped only. It becomes the (scope, provider) table
+  // the Connections screen writes: scope = 'workspace' (scope_id = owning user
+  // id) or 'blog' (scope_id = blog id). Secrets live in secret_blob (AES-256-
+  // GCM); the browser only ever receives secret_hint (`••••1234`).
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'blog'`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS scope_id BIGINT`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS config_json TEXT NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS secret_blob TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS secret_hint TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS connected_by BIGINT REFERENCES users(id) ON DELETE SET NULL`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS connected_at TEXT`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS last_tested_at TEXT`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS last_test_ok INTEGER`,
+  `ALTER TABLE integrations ADD COLUMN IF NOT EXISTS last_test_message TEXT NOT NULL DEFAULT ''`,
+  // Workspace-scoped rows have no blog, so the legacy NOT NULL must go.
+  `ALTER TABLE integrations ALTER COLUMN blog_id DROP NOT NULL`,
+  `UPDATE integrations SET scope_id = blog_id WHERE scope_id IS NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_integrations_scope ON integrations(scope, scope_id)`,
 ];
 
 export const PG_SCHEMA_STATEMENTS: string[] = [

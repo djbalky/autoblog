@@ -77,7 +77,7 @@ export function JobDetail({
       </header>
 
       <div className="mx-auto max-w-5xl px-6 py-8">
-        <ProviderBanner provider={provider} />
+        <ProviderBanner provider={provider} connectionsHref={`/blogs/${String(blog.id)}/connections`} />
 
         {!job ? (
           <div className="rounded-lg border border-neutral-200 bg-white p-10 text-center">

@@ -193,7 +193,7 @@ export function AutomationSettings({
       </header>
 
       <div className="mx-auto max-w-5xl px-6 py-8">
-        <ProviderBanner provider={provider} />
+        <ProviderBanner provider={provider} connectionsHref={`/blogs/${String(blog.id)}/connections`} />
 
         <section className="mb-6 rounded-lg border border-neutral-200 bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
