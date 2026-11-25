@@ -32,7 +32,7 @@ import {
   getAutomationWorkerState,
   tickAutomation,
 } from "../src/server/scheduler";
-import { getModelProviderState } from "../src/server/ai/modelProvider";
+import { resolveModelProviderState } from "../src/server/ai/modelProvider";
 
 const stamp = Date.now().toString(36);
 const out: Record<string, unknown> = {};
@@ -207,7 +207,7 @@ if (outsider) {
 }
 
 // ---- 3. The worker fabricates nothing without a model provider -------------
-const provider = getModelProviderState();
+const provider = await resolveModelProviderState({ blogId: blog.id });
 out.provider = { configured: provider.configured, provider: provider.provider, envVar: provider.requiredEnvVar };
 
 // Make a slot due right now and clear the "already enqueued" marker, so the

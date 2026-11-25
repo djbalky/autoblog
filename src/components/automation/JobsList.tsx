@@ -116,7 +116,7 @@ export function JobsList({ blog, role, canManage, jobs, provider, worker }: Jobs
       </header>
 
       <div className="mx-auto max-w-6xl px-6 py-8">
-        <ProviderBanner provider={provider} />
+        <ProviderBanner provider={provider} connectionsHref={`/blogs/${String(blog.id)}/connections`} />
 
         <section className="mb-6 rounded-lg border border-neutral-200 bg-white p-4">
           <h2 className="text-sm font-bold text-neutral-900">Create a job manually</h2>

@@ -35,7 +35,7 @@ import {
   getAutomationWorkerState,
   type AutomationWorkerState,
 } from "../scheduler";
-import { getModelProviderState, type ModelProviderState } from "../ai/modelProvider";
+import { resolveModelProviderState, type ModelProviderState } from "../ai/modelProvider";
 import { ROLE_PERMISSIONS, type RoleName } from "../roles";
 
 export interface ActionResult<T = unknown> {
@@ -80,7 +80,7 @@ export const automationLoadAction = createServerFn()
     await ensureInitialized();
     const user = await requireUser();
     const blogId = Number(data.blogId);
-    const provider = getModelProviderState();
+    const provider = await resolveModelProviderState({ blogId });
     const worker = await getAutomationWorkerState();
     const empty: AutomationPageData = {
       forbidden: true,
@@ -171,7 +171,7 @@ export const jobsIndexAction = createServerFn()
     await ensureInitialized();
     const user = await requireUser();
     const blogId = Number(data.blogId);
-    const provider = getModelProviderState();
+    const provider = await resolveModelProviderState({ blogId });
     const worker = await getAutomationWorkerState();
     const empty: JobsIndexData = {
       forbidden: true,
@@ -223,7 +223,7 @@ export const jobDetailAction = createServerFn()
     await ensureInitialized();
     const user = await requireUser();
     const blogId = Number(data.blogId);
-    const provider = getModelProviderState();
+    const provider = await resolveModelProviderState({ blogId });
     const worker = await getAutomationWorkerState();
     const empty: JobDetailData = {
       forbidden: true,

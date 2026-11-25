@@ -97,12 +97,75 @@ export function migrate(db: Database): void {
     ensureColumn(db, "content_jobs", "topic", "TEXT NOT NULL DEFAULT ''");
     ensureColumn(db, "content_jobs", "brief", "TEXT NOT NULL DEFAULT ''");
     ensureColumn(db, "scheduler_state", "last_note", "TEXT NOT NULL DEFAULT ''");
+    // Phase 6b-prep: the Connections hub. `integrations.blog_id` was NOT NULL in
+    // the v1 schema and workspace-scoped rows have no blog, so the table is
+    // rebuilt once (SQLite cannot drop a NOT NULL) before the new columns land.
+    relaxIntegrationsBlogId(db);
+    ensureColumn(db, "integrations", "scope", "TEXT NOT NULL DEFAULT 'blog'");
+    ensureColumn(db, "integrations", "scope_id", "INTEGER");
+    ensureColumn(db, "integrations", "label", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "integrations", "config_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn(db, "integrations", "secret_blob", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "integrations", "secret_hint", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "integrations", "connected_by", "INTEGER");
+    ensureColumn(db, "integrations", "connected_at", "TEXT");
+    ensureColumn(db, "integrations", "last_tested_at", "TEXT");
+    ensureColumn(db, "integrations", "last_test_ok", "INTEGER");
+    ensureColumn(db, "integrations", "last_test_message", "TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE integrations SET scope_id = blog_id WHERE scope_id IS NULL");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_integrations_scope ON integrations(scope, scope_id)"
+    );
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;
   }
 }
+/**
+ * SQLite cannot drop a NOT NULL constraint, so the v1 `integrations` table
+ * (blog-scoped only) is rebuilt once to allow workspace-scoped rows
+ * (blog_id NULL). Idempotent: it only runs while blog_id is still NOT NULL.
+ */
+function relaxIntegrationsBlogId(db: Database): void {
+  const cols = db.query("PRAGMA table_info(integrations)").all() as {
+    name: string;
+    notnull: number;
+  }[];
+  const blogId = cols.find((c) => c.name === "blog_id");
+  if (!blogId || blogId.notnull !== 1) return;
+  db.exec(`CREATE TABLE integrations_rebuild (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    blog_id           INTEGER REFERENCES blogs(id) ON DELETE CASCADE,
+    provider          TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'not_connected',
+    config            TEXT NOT NULL DEFAULT '',
+    error_message     TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    scope             TEXT NOT NULL DEFAULT 'blog',
+    scope_id          INTEGER,
+    label             TEXT NOT NULL DEFAULT '',
+    config_json       TEXT NOT NULL DEFAULT '{}',
+    secret_blob       TEXT NOT NULL DEFAULT '',
+    secret_hint       TEXT NOT NULL DEFAULT '',
+    connected_by      INTEGER,
+    connected_at      TEXT,
+    last_tested_at    TEXT,
+    last_test_ok      INTEGER,
+    last_test_message TEXT NOT NULL DEFAULT ''
+  )`);
+  db.exec(`INSERT INTO integrations_rebuild
+    (id, blog_id, provider, status, config, error_message, created_at, updated_at,
+     scope, scope_id)
+    SELECT id, blog_id, provider, status, config, error_message, created_at, updated_at,
+           'blog', blog_id
+    FROM integrations`);
+  db.exec("DROP TABLE integrations");
+  db.exec("ALTER TABLE integrations_rebuild RENAME TO integrations");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_integrations_blog ON integrations(blog_id)");
+}
+
 /**
  * Idempotently add a column to an existing table (SQLite's ADD COLUMN has no
  * IF NOT EXISTS, so we inspect PRAGMA first). Used for columns that arrived in
